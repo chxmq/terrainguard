@@ -6,58 +6,37 @@
 
 @layer base {
   :root {
-    /* Light theme (shadcn slate) */
-    --background: 210 40% 98%;
-    --foreground: 222 47% 11%;
+    --background: 210 30% 97%;
+    --foreground: 220 40% 13%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
-    --primary: 199 89% 48%;
+    --card-foreground: 220 40% 13%;
+    --primary: 205 82% 38%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 199 89% 48%;
+    --secondary: 210 30% 93%;
+    --secondary-foreground: 220 40% 13%;
+    --muted: 210 30% 93%;
+    --muted-foreground: 215 20% 46%;
+    --accent: 205 82% 38%;
     --accent-foreground: 0 0% 100%;
     --destructive: 0 72% 51%;
     --destructive-foreground: 0 0% 100%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 199 89% 48%;
-    --radius: 0.75rem;
+    --border: 214 24% 84%;
+    --input: 214 24% 84%;
+    --ring: 205 82% 38%;
+    --radius: 0.5rem;
   }
 
-  .dark {
-    /* Dark aviation theme */
-    --background: 222 47% 6%;
-    --foreground: 210 40% 96%;
-    --card: 222 40% 9%;
-    --card-foreground: 210 40% 96%;
-    --primary: 190 95% 50%;
-    --primary-foreground: 222 47% 6%;
-    --secondary: 217 33% 14%;
-    --secondary-foreground: 210 40% 96%;
-    --muted: 217 33% 14%;
-    --muted-foreground: 215 20% 60%;
-    --accent: 190 95% 45%;
-    --accent-foreground: 222 47% 6%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 217 33% 18%;
-    --input: 217 33% 18%;
-    --ring: 190 95% 50%;
-  }
-
-  * {
-    @apply border-border;
-  }
+  * { @apply border-border; }
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
     -webkit-font-smoothing: antialiased;
   }
-  html, body, #root {
-    height: 100%;
-    margin: 0;
-  }
+  html, body, #root { height: 100%; margin: 0; }
 }
+
+/* Thin scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(214 24% 72%); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(205 82% 55%); }

@@ -14,7 +14,16 @@ const CESIUM_BASE = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VER
 
 export interface Region { south: number; north: number; west: number; east: number; zoom: number }
 
+export interface RouteWaypoint { lat: number; lon: number }
+export interface RouteSector { sector: number; msa_ft: number; ttci: number | null }
+export interface FlyPos { lat: number; lon: number; clearance_ft: number }
+export interface TawsPoint { lat: number; lon: number; clearance_ft: number }
+
 let loadingPromise: Promise<void> | null = null;
+export function preloadCesium(): void {
+  loadCesium().catch(() => {});
+}
+
 function loadCesium(): Promise<void> {
   if (window.Cesium) return Promise.resolve();
   if (loadingPromise) return loadingPromise;
@@ -32,13 +41,32 @@ function loadCesium(): Promise<void> {
   return loadingPromise;
 }
 
+function ttciToColor(ttci: number | null): string {
+  if (ttci == null) return "#888";
+  if (ttci < 0.2) return "#2ecc71";
+  if (ttci < 0.4) return "#f1c40f";
+  if (ttci < 0.6) return "#e67e22";
+  if (ttci < 0.8) return "#e74c3c";
+  return "#8e44ad";
+}
+
+function clearanceColor(ft: number): string {
+  if (ft < 1500) return "#e74c3c";
+  if (ft < 3000) return "#e67e22";
+  return "#2ecc71";
+}
+
 export class Globe3DController {
   private viewer: any = null;
   private region: Region | null = null;
   private grid: { rows: number; cols: number; bounds: any; elevMin: number; elevMax: number; elev: number[][] } | null = null;
   private ttciLayer: any = null;
   private cfit: any[] = [];
+  private routeEntities: any[] = [];
+  private flyEntity: any = null;
+  private tawsEntities: any[] = [];
   private exaggeration = 3.0;
+  private tracking = false;
   onHint?: (text: string | null) => void;
 
   constructor(private container: HTMLElement) {}
@@ -86,15 +114,21 @@ export class Globe3DController {
       timeline: false, fullscreenButton: false, infoBox: true, selectionIndicator: true,
       creditContainer: document.createElement("div"),
     });
+    // Esri World Imagery — real satellite photos, globally available, no token needed.
     this.viewer.imageryLayers.addImageryProvider(new C.UrlTemplateImageryProvider({
-      url: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-      subdomains: "abcd", maximumLevel: 18, credit: "© OpenStreetMap, © CARTO",
+      url: "https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      maximumLevel: 19,
+      credit: "Esri, Maxar, Earthstar Geographics",
     }));
+    // Always show terrain at full brightness — no solar angle darkening.
+    this.viewer.scene.globe.enableLighting = false;
     this.viewer.scene.globe.depthTestAgainstTerrain = true;
+    this.viewer.scene.fog.enabled = false;
+    this.viewer.scene.skyAtmosphere.show = true;
     const ctrl = this.viewer.scene.screenSpaceCameraController;
     ctrl.enableCollisionDetection = false;
     ctrl.minimumZoomDistance = 80;
-    ctrl.maximumZoomDistance = 3.0e7;
+    ctrl.maximumZoomDistance = 1_800_000;
   }
 
   async open(region: Region | null) {
@@ -129,7 +163,7 @@ export class Globe3DController {
     const rect = C.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
     const provider = await C.SingleTileImageryProvider.fromUrl(url, { rectangle: rect });
     this.ttciLayer = this.viewer.imageryLayers.addImageryProvider(provider);
-    this.ttciLayer.alpha = 0.78;
+    this.ttciLayer.alpha = 0.72;
   }
 
   private flyTo() {
@@ -137,10 +171,166 @@ export class Globe3DController {
     const b = this.region!;
     const rect = C.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
     const sphere = C.BoundingSphere.fromRectangle3D(rect);
+    // Clamp radius so small regions don't zoom in too tight and large ones don't
+    // zoom out to globe-scale. Target range: 40 km – 600 km effective radius.
+    const r = Math.min(Math.max(sphere.radius, 40_000), 600_000);
     this.viewer.camera.flyToBoundingSphere(sphere, {
       duration: 1.8,
-      offset: new C.HeadingPitchRange(0, C.Math.toRadians(-32), sphere.radius * 2.6),
+      offset: new C.HeadingPitchRange(0, C.Math.toRadians(-32), r * 2.0),
     });
+  }
+
+  /** Draw the flight route in 3D: polyline, waypoint markers, per-sector MSA labels. */
+  updateRoute(waypoints: RouteWaypoint[], sectors: RouteSector[]) {
+    if (!this.viewer || !window.Cesium) return;
+    const C = window.Cesium;
+
+    this.routeEntities.forEach(e => this.viewer.entities.remove(e));
+    this.routeEntities = [];
+
+    if (waypoints.length < 2) return;
+
+    // Route polyline clamped to terrain
+    this.routeEntities.push(this.viewer.entities.add({
+      polyline: {
+        positions: waypoints.map(w => C.Cartesian3.fromDegrees(w.lon, w.lat)),
+        width: 4,
+        material: new C.ColorMaterialProperty(C.Color.fromCssColorString("#60a5fa").withAlpha(0.92)),
+        clampToGround: true,
+      },
+    }));
+
+    // Waypoint markers
+    waypoints.forEach((w, i) => {
+      this.routeEntities.push(this.viewer.entities.add({
+        position: C.Cartesian3.fromDegrees(w.lon, w.lat),
+        point: {
+          pixelSize: 11,
+          color: C.Color.fromCssColorString("#3b82f6"),
+          outlineColor: C.Color.WHITE,
+          outlineWidth: 2,
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: `WP${i + 1}`,
+          font: "11px Inter, sans-serif",
+          fillColor: C.Color.WHITE,
+          showBackground: true,
+          backgroundColor: C.Color.fromCssColorString("#0a0e1aCC"),
+          backgroundPadding: new C.Cartesian2(4, 3),
+          pixelOffset: new C.Cartesian2(0, -24),
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      }));
+    });
+
+    // Per-sector MSA labels at midpoint of each leg
+    sectors.forEach((s, i) => {
+      if (i + 1 >= waypoints.length) return;
+      const w1 = waypoints[i], w2 = waypoints[i + 1];
+      this.routeEntities.push(this.viewer.entities.add({
+        position: C.Cartesian3.fromDegrees((w1.lon + w2.lon) / 2, (w1.lat + w2.lat) / 2),
+        label: {
+          text: `S${s.sector}  MSA ${Math.round(s.msa_ft).toLocaleString()} ft`,
+          font: 'bold 12px "JetBrains Mono", monospace',
+          fillColor: C.Color.fromCssColorString("#93c5fd"),
+          showBackground: true,
+          backgroundColor: C.Color.fromCssColorString("#0a0e1add"),
+          backgroundPadding: new C.Cartesian2(6, 4),
+          pixelOffset: new C.Cartesian2(0, -44),
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          scaleByDistance: new C.NearFarScalar(4.0e4, 1.0, 2.5e6, 0.3),
+        },
+      }));
+    });
+  }
+
+  /** Move (or create) the animated fly aircraft entity in 3D. */
+  updateFlyAircraft(pos: FlyPos | null) {
+    if (!this.viewer || !window.Cesium) return;
+    const C = window.Cesium;
+
+    if (!pos) {
+      if (this.flyEntity) {
+        if (this.tracking) { this.viewer.trackedEntity = undefined; this.tracking = false; }
+        this.viewer.entities.remove(this.flyEntity);
+        this.flyEntity = null;
+      }
+      return;
+    }
+
+    const color = C.Color.fromCssColorString(clearanceColor(pos.clearance_ft));
+    const position = C.Cartesian3.fromDegrees(pos.lon, pos.lat);
+
+    if (!this.flyEntity) {
+      this.flyEntity = this.viewer.entities.add({
+        position,
+        // Camera sits 6 km behind, 3 km up when tracking — avoids zooming to ground level.
+        viewFrom: new C.Cartesian3(0, -6000, 3000),
+        point: {
+          pixelSize: 20,
+          color,
+          outlineColor: C.Color.WHITE,
+          outlineWidth: 3,
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+        label: {
+          text: "✈",
+          font: "bold 22px sans-serif",
+          fillColor: C.Color.WHITE,
+          pixelOffset: new C.Cartesian2(0, -36),
+          heightReference: C.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        },
+      });
+      // Auto-track the aircraft when it first appears
+      if (this.tracking) this.viewer.trackedEntity = this.flyEntity;
+    } else {
+      this.flyEntity.position = position;
+      this.flyEntity.point.color = color;
+    }
+  }
+
+  /** Draw the TAWS look-ahead path as colored polyline segments in 3D. */
+  updateTawsPath(origin: RouteWaypoint | null, profile: TawsPoint[]) {
+    if (!this.viewer || !window.Cesium) return;
+    const C = window.Cesium;
+
+    this.tawsEntities.forEach(e => this.viewer.entities.remove(e));
+    this.tawsEntities = [];
+
+    if (!origin || profile.length === 0) return;
+
+    let prev = origin;
+    profile.forEach(p => {
+      this.tawsEntities.push(this.viewer.entities.add({
+        polyline: {
+          positions: [
+            C.Cartesian3.fromDegrees(prev.lon, prev.lat),
+            C.Cartesian3.fromDegrees(p.lon, p.lat),
+          ],
+          width: 3,
+          material: new C.ColorMaterialProperty(
+            C.Color.fromCssColorString(clearanceColor(p.clearance_ft)).withAlpha(0.88),
+          ),
+          clampToGround: true,
+        },
+      }));
+      prev = p;
+    });
+  }
+
+  /** Toggle camera tracking of the fly aircraft. Returns new tracking state. */
+  toggleTrackAircraft(): boolean {
+    this.tracking = !this.tracking;
+    if (this.viewer) {
+      this.viewer.trackedEntity = this.tracking && this.flyEntity ? this.flyEntity : undefined;
+    }
+    return this.tracking;
   }
 
   async toggleCFIT(): Promise<"shown" | "hidden" | "empty"> {

@@ -1,70 +1,77 @@
-import { Moon, Sun, Database } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useState } from "react";
+import { Database } from "lucide-react";
 import { Logo } from "@/components/Logo";
-import { useTheme } from "@/components/theme-provider";
 import { useTtci } from "@/state/ttci";
-import { useTools } from "@/state/tools";
 import { cn } from "@/lib/utils";
 
 export function Header() {
-  const { theme, toggle } = useTheme();
   const { status, statusText, sourceLabel, isSynthetic } = useTtci();
-  const { view, setView } = useTools();
 
-  const dot =
-    status === "ready" ? "bg-risk-vlow shadow-[0_0_8px] shadow-risk-vlow"
-    : status === "error" ? "bg-risk-high"
-    : status === "computing" || status === "connecting" ? "bg-risk-low animate-pulse"
-    : "bg-muted-foreground";
+  const [utc, setUtc] = useState(() => new Date().toISOString().slice(11, 19));
+  useEffect(() => {
+    const id = setInterval(() => setUtc(new Date().toISOString().slice(11, 19)), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-card/70 px-5 backdrop-blur">
+    <header className="flex h-[52px] shrink-0 items-center justify-between border-b border-border bg-card px-5">
+      {/* ── Left: branding ── */}
       <div className="flex items-center gap-3">
         <Logo />
-        <div className="leading-tight">
-          <h1 className="bg-gradient-to-r from-risk-high to-risk-critical bg-clip-text text-lg font-bold text-transparent">
+        <div className="leading-none">
+          <div className="text-[15px] font-bold tracking-tight text-foreground">
             Terrain Guard
-          </h1>
-          <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+          </div>
+          <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.22em] text-muted-foreground">
             TTCI Assessment
-          </span>
+          </div>
         </div>
       </div>
 
-      <div className="flex items-center gap-2.5">
-        {/* 2D / 3D view toggle */}
-        <div className="flex items-center rounded-full border border-border bg-secondary/50 p-0.5 font-mono text-xs font-bold">
-          {(["2d", "3d"] as const).map((v) => (
-            <button
-              key={v}
-              onClick={() => setView(v)}
-              className={cn(
-                "rounded-full px-3 py-1 transition-colors",
-                view === v ? "bg-primary text-primary-foreground" : "text-muted-foreground"
-              )}
-            >
-              {v.toUpperCase()}
-            </button>
-          ))}
+      {/* ── Center: UTC clock ── */}
+      <div className="flex flex-col items-center">
+        <div className="font-mono text-[20px] font-bold tabular-nums text-foreground">
+          {utc}
         </div>
+        <div className="text-[9px] font-semibold uppercase tracking-[0.3em] text-muted-foreground">
+          UTC
+        </div>
+      </div>
+
+      {/* ── Right: system info ── */}
+      <div className="flex items-center gap-2">
         {sourceLabel && (
-          <div className="hidden items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-[11px] font-semibold text-primary md:flex">
-            <Database className="h-3 w-3" />
-            <span className="max-w-[260px] truncate">{sourceLabel}</span>
-          </div>
+          <span className="hidden items-center gap-1.5 rounded border border-border bg-secondary px-2.5 py-1 font-mono text-[10px] font-medium text-muted-foreground md:flex">
+            <Database className="h-3 w-3 shrink-0" />
+            <span className="max-w-[180px] truncate">{sourceLabel}</span>
+          </span>
         )}
+
         {isSynthetic && (
-          <div className="rounded-full border border-risk-low/40 bg-risk-low/10 px-3 py-1 text-[11px] font-semibold text-risk-low">
-            Demo data
-          </div>
+          <span className="rounded border border-amber-500/60 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+            Demo
+          </span>
         )}
-        <div className="flex items-center gap-2 rounded-full border border-border bg-secondary/50 px-3 py-1 text-xs font-medium">
-          <span className={cn("h-2 w-2 rounded-full", dot)} />
+
+        {/* System status — only prominent when something needs attention */}
+        <div
+          className={cn(
+            "flex items-center gap-1.5 rounded border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider transition-colors",
+            status === "ready"
+              ? "border-emerald-500/60 bg-emerald-50 text-emerald-700"
+              : status === "error"
+              ? "border-red-500/60 bg-red-50 text-red-700"
+              : "border-amber-500/60 bg-amber-50 text-amber-700 animate-pulse",
+          )}
+        >
+          <span
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              status === "ready" ? "bg-emerald-600" : status === "error" ? "bg-red-600" : "bg-amber-600",
+            )}
+          />
           {statusText}
         </div>
-        <Button variant="outline" size="icon" onClick={toggle} aria-label="Toggle theme">
-          {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-        </Button>
       </div>
     </header>
   );

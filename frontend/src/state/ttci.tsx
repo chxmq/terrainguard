@@ -72,10 +72,10 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
           applyInfo(i);
           setActiveRegion({ ...i.bounds, zoom: 11 });
           setStatus("ready");
-          setStatusText("Region loaded");
+          setStatusText("Ready");
         } else {
           setStatus("empty");
-          setStatusText("Select an area");
+          setStatusText("No region");
         }
       } catch {
         setStatus("error");
@@ -95,11 +95,11 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
       applyInfo(i);
       setOverlayVersion((v) => v + 1);
       setStatus("ready");
-      setStatusText("Region loaded");
+      setStatusText("Ready");
       toast("TTCI computed for the selected area.", "success");
     } catch (err) {
       setStatus(activeRegion ? "ready" : "empty");
-      setStatusText(activeRegion ? "Region loaded" : "Select an area");
+      setStatusText(activeRegion ? "Ready" : "No region");
       toast((err as Error).message || "Could not assess that area — try a smaller box.", "error");
       throw err;
     }
