@@ -2,7 +2,13 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { api, type Bounds, type Info, type PointQuery, type RiskLevel } from "@/lib/api";
 
 export type Status = "connecting" | "ready" | "computing" | "error" | "empty";
-export interface ActiveRegion extends Bounds { zoom: number }
+export interface ActiveRegion extends Bounds { zoom: number; source: string }
+
+function demTypeToSource(demType?: string): string {
+  if (demType === "copernicus30") return "copernicus";
+  if (demType === "opentopo") return "opentopo";
+  return "tiles";
+}
 export interface Toast { id: number; message: string; type: "info" | "success" | "error" }
 
 interface TtciState {
@@ -70,7 +76,7 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         if (i.ready && i.bounds) {
           applyInfo(i);
-          setActiveRegion({ ...i.bounds, zoom: 11 });
+          setActiveRegion({ ...i.bounds, zoom: 11, source: demTypeToSource(i.dem_type) });
           setStatus("ready");
           setStatusText("Ready");
         } else {
@@ -90,7 +96,7 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
     setStatusText("Computing…");
     try {
       const resp = await api.activateRegion({ ...bbox, source });
-      setActiveRegion({ ...resp.bounds, zoom: resp.zoom });
+      setActiveRegion({ ...resp.bounds, zoom: resp.zoom, source });
       const i = await api.info();
       applyInfo(i);
       setOverlayVersion((v) => v + 1);

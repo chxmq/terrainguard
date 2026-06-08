@@ -5,6 +5,8 @@
  * so no Cesium ion token is ever used. TTCI is draped on the relief.
  */
 
+import { msaClearanceColor } from "@/lib/utils";
+
 declare global {
   interface Window { Cesium: any; CESIUM_BASE_URL: string }
 }
@@ -12,12 +14,18 @@ declare global {
 const CESIUM_VERSION = "1.111";
 const CESIUM_BASE = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium/`;
 
-export interface Region { south: number; north: number; west: number; east: number; zoom: number }
+export interface Region { south: number; north: number; west: number; east: number; zoom: number; source?: string }
 
 export interface RouteWaypoint { lat: number; lon: number }
 export interface RouteSector { sector: number; msa_ft: number; ttci: number | null }
-export interface FlyPos { lat: number; lon: number; clearance_ft: number }
+export interface FlyPos { lat: number; lon: number; clearance_ft: number; heading_deg: number }
 export interface TawsPoint { lat: number; lon: number; clearance_ft: number }
+
+// Classic Cesium sample aircraft (glTF). GitHub raw serves it with permissive
+// CORS, so it loads cross-origin without any token or local asset.
+const AIRCRAFT_MODEL_URL =
+  "https://raw.githubusercontent.com/CesiumGS/cesium/1.111/Apps/SampleData/models/CesiumAir/Cesium_Air.glb";
+const FT_TO_M = 0.3048;
 
 let loadingPromise: Promise<void> | null = null;
 export function preloadCesium(): void {
@@ -48,12 +56,6 @@ function ttciToColor(ttci: number | null): string {
   if (ttci < 0.6) return "#e67e22";
   if (ttci < 0.8) return "#e74c3c";
   return "#8e44ad";
-}
-
-function clearanceColor(ft: number): string {
-  if (ft < 1500) return "#e74c3c";
-  if (ft < 3000) return "#e67e22";
-  return "#2ecc71";
 }
 
 export class Globe3DController {
@@ -128,7 +130,10 @@ export class Globe3DController {
     const ctrl = this.viewer.scene.screenSpaceCameraController;
     ctrl.enableCollisionDetection = false;
     ctrl.minimumZoomDistance = 80;
-    ctrl.maximumZoomDistance = 1_800_000;
+    // Allow zooming all the way out to a whole-globe view so the worldwide CFIT
+    // accident spread (flyHome) and free exploration both work; collision
+    // detection is off so tall exaggerated terrain can't trap the camera.
+    ctrl.maximumZoomDistance = 4.0e7;
   }
 
   async open(region: Region | null) {
@@ -142,7 +147,8 @@ export class Globe3DController {
   async loadRegion(region: Region) {
     const C = window.Cesium;
     this.hint("Computing terrain for this region…");
-    const url = `/api/region/grid?south=${region.south}&north=${region.north}&west=${region.west}&east=${region.east}&zoom=${region.zoom}&rows=256&cols=256`;
+    const src = region.source || "tiles";
+    const url = `/api/region/grid?south=${region.south}&north=${region.north}&west=${region.west}&east=${region.east}&zoom=${region.zoom}&source=${encodeURIComponent(src)}&rows=256&cols=256`;
     const res = await fetch(url);
     if (!res.ok) { this.hint("Failed to load terrain for this region."); return; }
     const data = await res.json();
@@ -159,7 +165,8 @@ export class Globe3DController {
     const C = window.Cesium;
     if (this.ttciLayer) { this.viewer.imageryLayers.remove(this.ttciLayer, true); this.ttciLayer = null; }
     const b = this.region!;
-    const url = `/api/region/overlay.png?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}&zoom=${b.zoom}`;
+    const src = b.source || "tiles";
+    const url = `/api/region/overlay.png?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}&zoom=${b.zoom}&source=${encodeURIComponent(src)}`;
     const rect = C.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
     const provider = await C.SingleTileImageryProvider.fromUrl(url, { rectangle: rect });
     this.ttciLayer = this.viewer.imageryLayers.addImageryProvider(provider);
@@ -246,9 +253,18 @@ export class Globe3DController {
         },
       }));
     });
+
+    // Frame the route so drawing / calculating an MSA zooms the camera to the area.
+    const positions = waypoints.map((w) => C.Cartesian3.fromDegrees(w.lon, w.lat));
+    const sphere = C.BoundingSphere.fromPoints(positions);
+    const r = Math.min(Math.max(sphere.radius, 30_000), 600_000);
+    this.viewer.camera.flyToBoundingSphere(sphere, {
+      duration: 1.5,
+      offset: new C.HeadingPitchRange(0, C.Math.toRadians(-35), r * 2.2),
+    });
   }
 
-  /** Move (or create) the animated fly aircraft entity in 3D. */
+  /** Move (or create) the animated 3-D aircraft model following the flight. */
   updateFlyAircraft(pos: FlyPos | null) {
     if (!this.viewer || !window.Cesium) return;
     const C = window.Cesium;
@@ -262,36 +278,39 @@ export class Globe3DController {
       return;
     }
 
-    const color = C.Color.fromCssColorString(clearanceColor(pos.clearance_ft));
-    const position = C.Cartesian3.fromDegrees(pos.lon, pos.lat);
+    // Fly the aircraft at its clearance height above the (exaggerated) terrain,
+    // so it visibly soars over the peaks rather than sitting on the ground.
+    const aglM = Math.max(pos.clearance_ft, 0) * FT_TO_M * this.exaggeration;
+    const position = C.Cartesian3.fromDegrees(pos.lon, pos.lat, aglM);
+    // The glTF model's nose is +X (east); offset by -90° so it points along the
+    // travel bearing (clockwise from north).
+    const hpr = new C.HeadingPitchRoll(C.Math.toRadians(pos.heading_deg - 90), 0, 0);
+    const orientation = C.Transforms.headingPitchRollQuaternion(position, hpr);
+    const tint = C.Color.fromCssColorString(msaClearanceColor(pos.clearance_ft));
 
     if (!this.flyEntity) {
       this.flyEntity = this.viewer.entities.add({
         position,
-        // Camera sits 6 km behind, 3 km up when tracking — avoids zooming to ground level.
-        viewFrom: new C.Cartesian3(0, -6000, 3000),
-        point: {
-          pixelSize: 20,
-          color,
-          outlineColor: C.Color.WHITE,
-          outlineWidth: 3,
-          heightReference: C.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-        },
-        label: {
-          text: "✈",
-          font: "bold 22px sans-serif",
-          fillColor: C.Color.WHITE,
-          pixelOffset: new C.Cartesian2(0, -36),
-          heightReference: C.HeightReference.CLAMP_TO_GROUND,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+        orientation,
+        // Chase camera: ~9 km behind and 4.5 km above when tracking.
+        viewFrom: new C.Cartesian3(0, -9000, 4500),
+        model: {
+          uri: AIRCRAFT_MODEL_URL,
+          minimumPixelSize: 72,
+          maximumScale: 60000,
+          color: tint,
+          colorBlendMode: C.ColorBlendMode.MIX,
+          colorBlendAmount: 0.45,
+          silhouetteColor: C.Color.WHITE,
+          silhouetteSize: 2.0,
+          heightReference: C.HeightReference.RELATIVE_TO_GROUND,
         },
       });
-      // Auto-track the aircraft when it first appears
       if (this.tracking) this.viewer.trackedEntity = this.flyEntity;
     } else {
       this.flyEntity.position = position;
-      this.flyEntity.point.color = color;
+      this.flyEntity.orientation = orientation;
+      this.flyEntity.model.color = tint;
     }
   }
 
@@ -315,7 +334,7 @@ export class Globe3DController {
           ],
           width: 3,
           material: new C.ColorMaterialProperty(
-            C.Color.fromCssColorString(clearanceColor(p.clearance_ft)).withAlpha(0.88),
+            C.Color.fromCssColorString(msaClearanceColor(p.clearance_ft)).withAlpha(0.88),
           ),
           clampToGround: true,
         },
@@ -334,6 +353,7 @@ export class Globe3DController {
   }
 
   async toggleCFIT(): Promise<"shown" | "hidden" | "empty"> {
+    if (!this.viewer || !window.Cesium) return "empty";
     const C = window.Cesium;
     if (this.cfit.length) {
       this.cfit.forEach((e) => this.viewer.entities.remove(e));

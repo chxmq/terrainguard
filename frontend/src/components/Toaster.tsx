@@ -10,15 +10,16 @@ export function Toaster() {
         <div
           key={t.id}
           className={cn(
-            "pointer-events-auto flex min-w-[260px] max-w-[420px] items-center gap-3 rounded-lg border bg-card px-3.5 py-2.5 text-sm shadow-lg backdrop-blur",
-            t.type === "error" ? "border-risk-high/50"
-              : t.type === "success" ? "border-risk-vlow/50" : "border-primary/40"
+            "pointer-events-auto flex min-w-[260px] max-w-[420px] items-center gap-3 panel-float px-3.5 py-2.5 text-sm",
+            t.type === "error" ? "border-risk-high/40"
+              : t.type === "success" ? "border-emerald-500/30" : "border-border",
           )}
         >
           <span
             className={cn(
               "h-2 w-2 shrink-0 rounded-full",
-              t.type === "error" ? "bg-risk-high" : t.type === "success" ? "bg-risk-vlow" : "bg-primary"
+              t.type === "error" ? "bg-risk-high"
+              : t.type === "success" ? "bg-emerald-500" : "bg-primary",
             )}
           />
           <span className="flex-1 leading-snug">{t.message}</span>

@@ -12,6 +12,23 @@ export function fmt(value: number | null | undefined, digits = 2): string {
   return Number(value).toFixed(digits);
 }
 
+/** MSA route-simulation clearance bands (feet above terrain while flying at MSA). */
+export const MSA_CLEARANCE_WARNING_FT = 1000;
+export const MSA_CLEARANCE_CAUTION_FT = 2000;
+
+export function msaClearanceStatus(ft: number): "WARNING" | "CAUTION" | "CLEAR" {
+  if (ft < MSA_CLEARANCE_WARNING_FT) return "WARNING";
+  if (ft < MSA_CLEARANCE_CAUTION_FT) return "CAUTION";
+  return "CLEAR";
+}
+
+export function msaClearanceColor(ft: number): string {
+  const status = msaClearanceStatus(ft);
+  if (status === "WARNING") return "#e74c3c";
+  if (status === "CAUTION") return "#e67e22";
+  return "#2ecc71";
+}
+
 /** Format an integer with thousands separators. */
 export function fmtInt(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return "—";

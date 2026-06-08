@@ -14,7 +14,7 @@ export default function App() {
           <Header />
           <main className="flex flex-1 overflow-hidden">
             <Sidebar />
-            <div className="relative flex-1">
+            <div className="relative flex-1 overflow-hidden">
               <MapView />
               <Globe3DView />
             </div>

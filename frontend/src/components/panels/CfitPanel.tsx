@@ -70,7 +70,7 @@ export function CfitPanel() {
       <section>
         <SectionHead>TTCI Distribution</SectionHead>
         <div className="space-y-2.5">
-          <Bar label="Crash sites"  value={s.accident_mean_ttci} cls="bg-gradient-to-r from-risk-high to-risk-critical" />
+          <Bar label="Crash sites"  value={s.accident_mean_ttci} cls="bg-risk-high" />
           <Bar label="Surrounding"  value={s.control_mean_ttci}  cls="bg-risk-vlow" />
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">

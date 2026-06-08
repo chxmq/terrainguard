@@ -131,6 +131,17 @@ cd frontend
 npm run build                     # → frontend/dist, served by the API at :8000
 ```
 
+### Tests
+
+```bash
+cd backend
+pytest                            # property-based (Hypothesis) + example suite
+```
+
+Covers the TTCI pipeline (unit-range, no-data handling, risk classification,
+weight validation), the geo round-trip, the MSA calculator, the overlay
+renderer, and the validation statistics.
+
 - **Development:** open **http://localhost:5173** (hot reload).
 - **Demo / production:** `npm run build`, then open **http://127.0.0.1:8000**
   (FastAPI serves the built client and the API from one origin).
@@ -225,4 +236,19 @@ stream tiles for real-time flight-planning and avionics use.
 ---
 
 
+
+
+## Notes & limitations
+
+- The TTCI engine is **global**; a default region is never required. Products in
+  `backend/data/` are recomputed on demand and excluded from version control.
+- `/api/taws/lookahead` is a faithful *demonstration* of predictive look-ahead
+  alerting that modulates its envelope by TTCI — **not** a certified TAWS/EGPWS
+  (it omits flight-phase logic and an obstacle database).
+- The 3D globe uses **CesiumJS** (Apache-2.0, no token); base imagery is Esri
+  World Imagery and the relief is built from our own DEM, so no Cesium ion key
+  is used.
+- The validation reports **correlation**: terrain complexity is one CFIT risk
+  factor among weather, procedures, and human factors. The dataset is curated
+  and modest (15 accidents); results are reported with their caveats.
 

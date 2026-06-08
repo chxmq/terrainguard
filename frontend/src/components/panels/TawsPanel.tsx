@@ -23,8 +23,10 @@ export function TawsPanel() {
     tawsResult, setTawsResult,
   } = useTools();
   const simRef = useRef<number | null>(null);
+  const aircraftRef = useRef(aircraft);
+  aircraftRef.current = aircraft;
 
-  const run = async (ac = aircraft, params = tawsParams) => {
+  const run = async (ac = aircraftRef.current, params = tawsParams) => {
     if (!ac) return;
     try {
       setTawsResult(await api.tawsLookahead({ lat: ac.lat, lon: ac.lon, ...params }));
@@ -34,8 +36,11 @@ export function TawsPanel() {
     }
   };
 
+  // Recompute when the aircraft moves; debounce param edits so typing doesn't spam the API.
   useEffect(() => {
-    if (aircraft && simRef.current === null) run();
+    if (!aircraft || simRef.current !== null) return;
+    const id = window.setTimeout(() => { run(aircraft, tawsParams); }, 350);
+    return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aircraft, tawsParams]);
 
@@ -46,14 +51,16 @@ export function TawsPanel() {
 
   const toggleSim = () => {
     if (simRef.current !== null) { stopSim(); return; }
-    if (!aircraft) return;
+    const start = aircraftRef.current;
+    if (!start) return;
     let steps = 0;
+    let pos = { ...start };
     simRef.current = window.setInterval(async () => {
       steps++;
-      const [lat, lon] = destinationPoint(aircraft.lat, aircraft.lon, tawsParams.heading_deg, 0.4 * 1.852);
-      const next = { lat, lon };
-      setAircraft(next);
-      await run(next, tawsParams);
+      const [lat, lon] = destinationPoint(pos.lat, pos.lon, tawsParams.heading_deg, 0.4 * 1.852);
+      pos = { lat, lon };
+      setAircraft(pos);
+      await run(pos, tawsParams);
       if (steps >= 60) stopSim();
     }, 650);
   };
@@ -63,11 +70,15 @@ export function TawsPanel() {
 
   return (
     <div className="space-y-5">
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        EGPWS-style forward terrain scan. Set aircraft state, place on the map,
-        and the look-ahead horizon adapts to TTCI complexity.
-        {!activeRegion && " Select a region first."}
-      </p>
+      {!activeRegion ? (
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          Select a terrain area on the map first.
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Set the aircraft position and heading, then see terrain warnings along the flight path.
+        </p>
+      )}
 
       {/* ── Alert Status ── */}
       <section>

@@ -588,6 +588,10 @@ from collections import OrderedDict
 _REGION_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _REGION_CACHE_MAX = 16
 _REGION_ZOOM_MIN, _REGION_ZOOM_MAX = 6, 13
+# Largest area (degrees per side) accepted for on-demand assessment. Matches the
+# span bucket used by :func:`_auto_zoom` (12° → zoom 8). Larger boxes are still
+# capped by per-source tile limits inside the DEM acquirers.
+_MAX_REGION_SPAN_DEG = 12.0
 
 
 def _region_key(south, north, west, east, zoom, source) -> str:
@@ -609,6 +613,14 @@ def _validate_region(south, north, west, east, zoom):
             raise HTTPException(status_code=400, detail=f"{nm} longitude out of range.")
     if north <= south or east <= west:
         raise HTTPException(status_code=400, detail="Need north>south and east>west.")
+    if (north - south) > _MAX_REGION_SPAN_DEG or (east - west) > _MAX_REGION_SPAN_DEG:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Selected area is too large (max {_MAX_REGION_SPAN_DEG}° per side). "
+                f"Zoom in and draw a smaller box."
+            ),
+        )
     zoom = max(_REGION_ZOOM_MIN, min(zoom, _REGION_ZOOM_MAX))
     return south, north, west, east, zoom
 

@@ -65,7 +65,7 @@ const Ctx = createContext<ToolsState | null>(null);
 
 export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const [mode, _setMode] = useState<ToolMode>("idle");
-  const [view, setView] = useState<ViewMode>("3d");
+  const [view, setView] = useState<ViewMode>("2d");
 
   // Interactive modes require the 2D map — auto-switch when activated.
   const setMode = (m: ToolMode) => {

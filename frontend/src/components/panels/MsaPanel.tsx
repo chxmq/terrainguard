@@ -151,15 +151,17 @@ export function MsaPanel() {
     <div className="space-y-5">
       {expandedPortal}
 
-      {/* Description */}
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        Draw a flight route to compute the Minimum Safe Altitude per leg — 1000 ft obstacle
-        clearance over a 5 NM buffer.{!activeRegion && " Select a region first."}
-      </p>
+      {!activeRegion && (
+        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          Select a terrain area on the map first.
+        </p>
+      )}
 
-      {/* ── Route Controls ── */}
       <section>
-        <SectionHead>Route Controls</SectionHead>
+        <SectionHead>1. Draw your route</SectionHead>
+        <p className="mb-3 text-sm text-muted-foreground">
+          Click waypoints on the map, then double-click to finish. Each leg gets a minimum safe altitude.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -168,32 +170,34 @@ export function MsaPanel() {
             onClick={() => setMode(drawing ? "idle" : "draw-route")}
           >
             <Pencil className="h-3.5 w-3.5" />
-            {drawing ? "Click map to add…" : "Draw Route"}
+            {drawing ? "Drawing…" : "Draw route"}
           </Button>
           <Button size="sm" variant="outline" onClick={clear}>Clear</Button>
-          <Button size="sm" disabled={!canCalc} onClick={calculate}>
-            {busy ? "Computing…" : "Calculate MSA"}
-          </Button>
         </div>
-
-        <p className="mt-2 text-[11px] text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           {routeWaypoints.length === 0
-            ? "No active route"
-            : `${routeWaypoints.length} waypoint${routeWaypoints.length === 1 ? "" : "s"}`}
+            ? "No waypoints yet"
+            : `${routeWaypoints.length} waypoint${routeWaypoints.length === 1 ? "" : "s"} placed`}
         </p>
+      </section>
+
+      <section>
+        <SectionHead>2. Calculate safe altitudes</SectionHead>
+        <Button size="sm" className="w-full" disabled={!canCalc} onClick={calculate}>
+          {busy ? "Calculating…" : "Calculate minimum safe altitude"}
+        </Button>
       </section>
 
       {/* ── Fly Simulation ── */}
       {msaProfile.length > 0 && (
         <section>
-          <SectionHead>Simulation</SectionHead>
+          <SectionHead>3. Fly the route</SectionHead>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant={flyRunning ? "secondary" : "default"}
               disabled={!canFly}
               onClick={flyRunning ? stopFly : startFly}
-              className={!flyRunning ? "bg-emerald-600 hover:bg-emerald-500 text-white" : ""}
             >
               {flyRunning
                 ? <><Square className="h-3.5 w-3.5" /> Stop Flight</>
@@ -209,7 +213,7 @@ export function MsaPanel() {
       {/* ── MSA Sectors ── */}
       {msaSectors.length > 0 && (
         <section>
-          <SectionHead>MSA Sectors</SectionHead>
+          <SectionHead>Results by leg</SectionHead>
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -272,12 +276,5 @@ export function MsaPanel() {
 }
 
 function SectionHead({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-3 flex items-center gap-2.5">
-      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-        {children}
-      </span>
-      <div className="h-px flex-1 bg-border" />
-    </div>
-  );
+  return <h3 className="mb-2 text-sm font-semibold text-foreground">{children}</h3>;
 }

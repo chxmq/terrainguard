@@ -2,97 +2,86 @@ import { useTtci } from "@/state/ttci";
 import { fmt, fmtInt } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
+const STEPS = [
+  "Use Select area (top-left of map) or pick a preset region.",
+  "Click anywhere on the map to see terrain complexity and elevation.",
+  "Open Route or Alerts in this sidebar for flight-planning tools.",
+];
+
 export function InfoPanel() {
   const { info, riskLevels, lastQuery, activeRegion } = useTtci();
   const stats = info?.stats;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {!activeRegion && (
+        <section className="rounded-lg border border-border bg-secondary/50 p-4">
+          <h3 className="mb-2 text-sm font-semibold text-foreground">Quick start</h3>
+          <ol className="list-decimal space-y-1.5 pl-4 text-xs leading-relaxed text-muted-foreground">
+            {STEPS.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ol>
+        </section>
+      )}
 
-      {/* ── Point Query ── */}
       <section>
-        <SectionHead>Point Query</SectionHead>
+        <SectionHead>Map click result</SectionHead>
         {!lastQuery ? (
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-sm text-muted-foreground">
             {activeRegion
-              ? "Click anywhere on the map to read the terrain risk at that point."
-              : "Select a region first, then click the map to query."}
+              ? "Click the map to see the risk score and elevation at that location."
+              : "Select a region on the map first."}
           </p>
         ) : (
           <div className="space-y-4">
-            {/* TTCI hero */}
             <div>
-              <div className="mb-1 text-[9px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                TTCI Score
-              </div>
+              <div className="mb-1 text-xs text-muted-foreground">Terrain complexity</div>
               <div className="flex items-end gap-3">
                 <span
-                  className="font-mono text-5xl font-black leading-none"
+                  className="font-mono text-4xl font-bold leading-none"
                   style={{ color: lastQuery.risk_color }}
                 >
-                  {fmt(lastQuery.ttci, 3)}
+                  {fmt(lastQuery.ttci, 2)}
                 </span>
                 <span
-                  className="mb-1 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                  style={{
-                    color: lastQuery.risk_color,
-                    background: `${lastQuery.risk_color}22`,
-                  }}
+                  className="mb-1 rounded-md px-2 py-0.5 text-xs font-semibold"
+                  style={{ color: lastQuery.risk_color, background: `${lastQuery.risk_color}18` }}
                 >
                   {lastQuery.risk_level}
                 </span>
               </div>
-              <div className="mt-2 h-1 overflow-hidden rounded-full bg-secondary">
-                <div
-                  className="h-full rounded-full transition-all"
-                  style={{
-                    width: `${Math.min(lastQuery.ttci * 100, 100)}%`,
-                    background: lastQuery.risk_color,
-                  }}
-                />
-              </div>
             </div>
 
-            {/* Terrain metrics */}
-            <div className="grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-4">
-              <DataField
-                label="Elevation"
-                value={`${fmt(lastQuery.elevation_m, 0)} m`}
-                sub={`${fmtInt(lastQuery.elevation_ft)} ft`}
-              />
+            <div className="grid grid-cols-2 gap-3 border-t border-border pt-3 text-sm">
+              <DataField label="Elevation" value={`${fmtInt(lastQuery.elevation_ft)} ft`} />
               <DataField label="Slope" value={`${fmt(lastQuery.metrics.slope_deg, 1)}°`} />
-              <DataField label="TRI" value={`${fmt(lastQuery.metrics.tri_m, 1)} m`} />
-              <DataField label="Elev σ" value={`${fmt(lastQuery.metrics.elevation_std_m, 1)} m`} />
+              <DataField label="Ruggedness" value={`${fmt(lastQuery.metrics.tri_m, 0)} m`} />
+              <DataField label="Variation" value={`${fmt(lastQuery.metrics.elevation_std_m, 0)} m`} />
             </div>
           </div>
         )}
       </section>
 
-      {/* ── Region Statistics ── */}
       {stats && (
-        <section className="border-t border-border pt-5">
-          <SectionHead>Region Statistics</SectionHead>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-4">
-            <DataField label="Mean TTCI" value={fmt(stats.mean, 3)} accent />
-            <DataField label="Max TTCI"  value={fmt(stats.max, 3)} accent />
-            <DataField label="Min TTCI"  value={fmt(stats.min, 3)} />
-            <DataField label="Std Dev"   value={fmt(stats.std, 3)} />
+        <section className="border-t border-border pt-4">
+          <SectionHead>Region summary</SectionHead>
+          <div className="grid grid-cols-2 gap-3 text-sm">
+            <DataField label="Average risk" value={fmt(stats.mean, 2)} accent />
+            <DataField label="Highest risk" value={fmt(stats.max, 2)} accent />
+            <DataField label="Lowest risk" value={fmt(stats.min, 2)} />
           </div>
         </section>
       )}
 
-      {/* ── Risk Bands ── */}
       {riskLevels.length > 0 && (
-        <section className="border-t border-border pt-5">
-          <SectionHead>Risk Bands</SectionHead>
+        <section className="border-t border-border pt-4">
+          <SectionHead>Risk scale</SectionHead>
           <div className="space-y-2">
             {riskLevels.map((l) => (
-              <div key={l.label} className="flex items-center gap-3">
-                <span className="h-2 w-5 shrink-0 rounded-sm" style={{ background: l.color }} />
-                <span className="text-xs font-medium text-foreground">{l.label}</span>
-                <span className="ml-auto font-mono text-[11px] text-muted-foreground">
-                  {fmt(l.min, 1)}–{fmt(l.max, 1)}
-                </span>
+              <div key={l.label} className="flex items-center gap-2 text-sm">
+                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: l.color }} />
+                <span className="text-foreground">{l.label}</span>
               </div>
             ))}
           </div>
@@ -103,32 +92,18 @@ export function InfoPanel() {
 }
 
 function SectionHead({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mb-3 flex items-center gap-2.5">
-      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-        {children}
-      </span>
-      <div className="h-px flex-1 bg-border" />
-    </div>
-  );
+  return <h3 className="mb-2 text-sm font-semibold text-foreground">{children}</h3>;
 }
 
 function DataField({
-  label, value, sub, accent,
+  label, value, accent,
 }: {
-  label: string; value: string | React.ReactNode; sub?: string; accent?: boolean;
+  label: string; value: string | React.ReactNode; accent?: boolean;
 }) {
   return (
     <div>
-      <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-        {label}
-      </div>
-      <div className={cn("mt-0.5 font-mono text-sm font-bold leading-tight", accent ? "text-primary" : "text-foreground")}>
-        {value}
-      </div>
-      {sub && (
-        <div className="mt-0.5 font-mono text-[11px] leading-none text-muted-foreground">{sub}</div>
-      )}
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className={cn("font-medium", accent ? "text-primary" : "text-foreground")}>{value}</div>
     </div>
   );
 }
