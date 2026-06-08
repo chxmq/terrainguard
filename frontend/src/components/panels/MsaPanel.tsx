@@ -65,6 +65,14 @@ export function MsaPanel() {
   const canCalc = routeWaypoints.length >= 2 && !busy;
   const canFly  = msaProfile.length >= 2 && !busy;
 
+  // ── Derive route-wide MSH (highest MSA across all sectors) ──
+  const routeMsh = msaSectors.length
+    ? Math.max(...msaSectors.map((s) => s.msa_ft))
+    : null;
+  const msaRiskColor = routeMsh
+    ? riskColor(riskLevels, Math.min(routeMsh / 30000, 1))
+    : undefined;
+
   const stopFly = () => {
     if (flyRef.current !== null) { clearInterval(flyRef.current); flyRef.current = null; }
     setFlyRunning(false);
@@ -151,17 +159,31 @@ export function MsaPanel() {
     <div className="space-y-5">
       {expandedPortal}
 
-      {!activeRegion && (
-        <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-          Select a terrain area on the map first.
-        </p>
+      {/* Description */}
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Draw a flight route to compute the Minimum Safe Altitude per leg — 1000 ft obstacle
+        clearance over a 5 NM buffer.{!activeRegion && " Select a region first."}
+      </p>
+
+      {/* ── Route-wide MSH hero callout ── */}
+      {routeMsh !== null && (
+        <div className="rounded-lg border-2 bg-card px-4 py-3 text-center shadow-sm"
+          style={{ borderColor: "#e74c3c" }}>
+          <div className="text-[9px] font-semibold uppercase tracking-[0.22em] text-muted-foreground">
+            Route Minimum Safe Height
+          </div>
+          <div className="font-mono text-4xl font-black leading-tight" style={{ color: "#e74c3c" }}>
+            {fmtInt(routeMsh)} ft
+          </div>
+          <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+            {Math.round(routeMsh * 0.3048).toLocaleString()} m &nbsp;·&nbsp; Do not fly below this altitude
+          </div>
+        </div>
       )}
 
+      {/* ── Route Controls ── */}
       <section>
-        <SectionHead>1. Draw your route</SectionHead>
-        <p className="mb-3 text-sm text-muted-foreground">
-          Click waypoints on the map, then double-click to finish. Each leg gets a minimum safe altitude.
-        </p>
+        <SectionHead>Route Controls</SectionHead>
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
@@ -170,34 +192,32 @@ export function MsaPanel() {
             onClick={() => setMode(drawing ? "idle" : "draw-route")}
           >
             <Pencil className="h-3.5 w-3.5" />
-            {drawing ? "Drawing…" : "Draw route"}
+            {drawing ? "Click map to add…" : "Draw Route"}
           </Button>
           <Button size="sm" variant="outline" onClick={clear}>Clear</Button>
+          <Button size="sm" disabled={!canCalc} onClick={calculate}>
+            {busy ? "Computing…" : "Calculate MSA"}
+          </Button>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          {routeWaypoints.length === 0
-            ? "No waypoints yet"
-            : `${routeWaypoints.length} waypoint${routeWaypoints.length === 1 ? "" : "s"} placed`}
-        </p>
-      </section>
 
-      <section>
-        <SectionHead>2. Calculate safe altitudes</SectionHead>
-        <Button size="sm" className="w-full" disabled={!canCalc} onClick={calculate}>
-          {busy ? "Calculating…" : "Calculate minimum safe altitude"}
-        </Button>
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          {routeWaypoints.length === 0
+            ? "No active route"
+            : `${routeWaypoints.length} waypoint${routeWaypoints.length === 1 ? "" : "s"}`}
+        </p>
       </section>
 
       {/* ── Fly Simulation ── */}
       {msaProfile.length > 0 && (
         <section>
-          <SectionHead>3. Fly the route</SectionHead>
+          <SectionHead>Simulation</SectionHead>
           <div className="flex flex-wrap gap-2">
             <Button
               size="sm"
               variant={flyRunning ? "secondary" : "default"}
               disabled={!canFly}
               onClick={flyRunning ? stopFly : startFly}
+              className={!flyRunning ? "bg-emerald-600 hover:bg-emerald-500 text-white" : ""}
             >
               {flyRunning
                 ? <><Square className="h-3.5 w-3.5" /> Stop Flight</>
@@ -213,7 +233,7 @@ export function MsaPanel() {
       {/* ── MSA Sectors ── */}
       {msaSectors.length > 0 && (
         <section>
-          <SectionHead>Results by leg</SectionHead>
+          <SectionHead>MSA Sectors</SectionHead>
           <table className="w-full text-xs">
             <thead>
               <tr className="border-b border-border text-[9px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -230,6 +250,7 @@ export function MsaPanel() {
                   className={cn(
                     "border-b border-border/50 transition-colors",
                     flyPosition?.sectorLabel === `S${s.sector}` ? "bg-primary/8" : "",
+                    s.msa_ft === routeMsh ? "bg-red-500/6" : "",
                   )}
                 >
                   <td className="py-2">
@@ -238,7 +259,14 @@ export function MsaPanel() {
                     </span>
                   </td>
                   <td className="py-2 text-muted-foreground">{fmt(s.distance_nm, 1)} NM</td>
-                  <td className="py-2 font-semibold text-primary">{fmtInt(s.msa_ft)} ft</td>
+                  <td className="py-2 font-semibold" style={{ color: s.msa_ft === routeMsh ? "#e74c3c" : undefined }}>
+                    {fmtInt(s.msa_ft)} ft
+                    {s.msa_ft === routeMsh && (
+                      <span className="ml-1 rounded bg-red-500/15 px-1 py-0.5 text-[8px] font-bold text-red-600">
+                        MSH
+                      </span>
+                    )}
+                  </td>
                   <td
                     className="py-2 font-semibold"
                     style={{ color: s.ttci ? riskColor(riskLevels, s.ttci.mean) : undefined }}
@@ -278,7 +306,9 @@ export function MsaPanel() {
 function SectionHead({ children }: { children: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2.5">
-      <span className="text-section shrink-0">{children}</span>
+      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
+        {children}
+      </span>
       <div className="h-px flex-1 bg-border" />
     </div>
   );
