@@ -42,6 +42,7 @@ DATA_DIR = Path(__file__).parent / "data"
 OVERLAY_PNG_PATH = DATA_DIR / "ttci_overlay.png"
 METADATA_JSON_PATH = DATA_DIR / "ttci_metadata.json"
 VALIDATION_REPORT_PATH = DATA_DIR / "validation_report.json"
+GLOBAL_VALIDATION_REPORT_PATH = DATA_DIR / "validation_report_global.json"
 
 # --- Demo region configuration --------------------------------------------
 #
@@ -99,7 +100,13 @@ _state: Dict[str, Any] = {
     "ready": False,
     "zoom": None,
     "source": None,
+    "overlay_png_bytes": None,
 }
+
+
+def _cache_overlay_png(results: Dict[str, Any]) -> None:
+    """Cache banded overlay bytes so GET /api/ttci/overlay.png avoids re-rendering."""
+    _state["overlay_png_bytes"] = generate_overlay_bytes(results["ttci"])
 
 _VALID_REGION_SOURCES = frozenset({"tiles", "copernicus", "opentopo"})
 
@@ -264,6 +271,7 @@ def _precompute_ttci() -> None:
 
         _state["results"] = results
         _state["ready"] = True
+        _cache_overlay_png(results)
         if not force_synthetic:
             _state["zoom"] = zoom
             _state["source"] = src
@@ -275,6 +283,7 @@ def _precompute_ttci() -> None:
         # Fail closed: keep the service not-ready and surface the cause in logs.
         _state["results"] = None
         _state["ready"] = False
+        _state["overlay_png_bytes"] = None
         logger.exception("TTCI precompute failed; service will remain not-ready.")
 
 
@@ -566,7 +575,10 @@ async def ttci_overlay():
     surface is available are rejected with a 503 (see :func:`_require_ready`).
     """
     _require_ready()
-    png_bytes = generate_overlay_bytes(_state["results"]["ttci"])
+    png_bytes = _state.get("overlay_png_bytes")
+    if png_bytes is None:
+        png_bytes = generate_overlay_bytes(_state["results"]["ttci"])
+        _state["overlay_png_bytes"] = png_bytes
     return Response(content=png_bytes, media_type="image/png")
 
 
@@ -833,6 +845,7 @@ async def region_activate(req: "ActivateRegionRequest"):
     _state["ready"] = True
     _state["zoom"] = zoom
     _state["source"] = source
+    _cache_overlay_png(results)
 
     ttci = results["ttci"]
     b = results["bounds"]
@@ -1303,6 +1316,123 @@ async def validation():
         raise HTTPException(
             status_code=500,
             detail=f"Validation report could not be read: {exc}",
+        )
+
+
+def _patch_metrics_sync(lat: float, lon: float, dim: int) -> Dict[str, Any]:
+    """CPU/DEM-heavy patch metrics work — run in a thread pool from the async handler."""
+    import base64
+    from io import BytesIO
+    from PIL import Image as _PILImage
+    from ttci.validation import PATCH_HALF_DEG
+    from ttci.terrain_tiles import download_terrain_dem
+    from ttci.pipeline import compute_ttci as _cttci
+
+    lat, lon = validate_coordinate(lat, lon)
+    dim = max(16, min(int(dim), 128))
+
+    half = PATCH_HALF_DEG
+    bbox = (lat - half, lat + half, lon - half, lon + half)
+    patch = download_terrain_dem(bbox, zoom=11)
+
+    result = _cttci(patch.elevation, cell_size=patch.cell_size_m)
+    rows, cols = result["ttci"].shape
+
+    site_row, site_col = coord_to_cell(patch.transform, lat, lon)
+    site_row = max(0, min(rows - 1, site_row))
+    site_col = max(0, min(cols - 1, site_col))
+
+    _KV = np.array([0.00, 0.25, 0.50, 0.75, 1.00])
+    _KR = np.array([46,  241, 230, 231, 142], dtype=np.float64)
+    _KG = np.array([204, 196, 126,  76,  68], dtype=np.float64)
+    _KB = np.array([113,  15,  34,  60, 173], dtype=np.float64)
+
+    def _to_png(surface: np.ndarray) -> str:
+        clean = np.nan_to_num(np.clip(surface, 0.0, 1.0), nan=0.0)
+        r_step = max(1, rows // dim)
+        c_step = max(1, cols // dim)
+        small = clean[::r_step, ::c_step][:dim, :dim]
+        h, w = small.shape
+
+        img_arr = np.stack([
+            np.interp(small, _KV, _KR),
+            np.interp(small, _KV, _KG),
+            np.interp(small, _KV, _KB),
+        ], axis=-1).astype(np.uint8)
+
+        sr = max(0, min(h - 1, site_row // r_step))
+        sc = max(0, min(w - 1, site_col // c_step))
+        for d in range(-3, 4):
+            color = [255, 255, 255] if abs(d) <= 2 else [20, 20, 20]
+            if 0 <= sr + d < h:
+                img_arr[sr + d, sc] = color
+            if 0 <= sc + d < w:
+                img_arr[sr, sc + d] = color
+
+        img = _PILImage.fromarray(img_arr, "RGB")
+        img = img.resize((dim * 3, dim * 3), _PILImage.NEAREST)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+    t = result["ttci"]
+    e = result["elevation_std_norm"]
+    valid = ~(np.isnan(t) | np.isnan(e))
+    corr = float(np.corrcoef(t[valid], e[valid])[0, 1]) if valid.sum() > 1 else float("nan")
+
+    return {
+        "ttci_png": _to_png(result["ttci"]),
+        "estd_png": _to_png(result["elevation_std_norm"]),
+        "corr": round(corr, 3),
+        "bounds": {
+            "south": float(bbox[0]), "north": float(bbox[1]),
+            "west":  float(bbox[2]), "east":  float(bbox[3]),
+        },
+    }
+
+
+@app.get("/api/validation/patch-metrics")
+async def patch_metrics_endpoint(lat: float, lon: float, dim: int = 64):
+    """Return base64 PNG heatmaps comparing composite TTCI vs normalized
+    elevation_std for a DEM patch centred on (lat, lon).
+
+    Used to visualise where the two measures agree and diverge across the
+    same patch of terrain.  A white crosshair marks the (lat, lon) impact
+    cell.  Both images are ``dim``×``dim`` pixels upscaled 3× with nearest-
+    neighbour interpolation and encoded as ``data:image/png;base64`` URIs.
+    """
+    try:
+        return await asyncio.to_thread(_patch_metrics_sync, lat, lon, dim)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"DEM unavailable: {exc}")
+
+
+@app.get("/api/validation/global")
+async def validation_global():
+    """Serve the global-control CFIT validation report.
+
+    Compares the same 15 CFIT accident sites against TTCI values sampled from
+    8 geographically diverse reference terrain regions.  Generated offline by
+    ``validate_ttci_global.py``; cached to
+    ``data/validation_report_global.json``.
+    """
+    if not GLOBAL_VALIDATION_REPORT_PATH.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Global validation report not generated yet. "
+                "Run `python validate_ttci_global.py` in the backend."
+            ),
+        )
+    try:
+        with open(GLOBAL_VALIDATION_REPORT_PATH) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Global validation report could not be read: {exc}",
         )
 
 

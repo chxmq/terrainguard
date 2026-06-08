@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { MsaProfileChart } from "@/components/charts";
 import { fmt, fmtInt } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { formatApiError, NOTIFY } from "@/lib/notifications";
 
 function buildFlyPosition(
   pt: ProfilePoint,
@@ -31,7 +32,11 @@ function buildFlyPosition(
   const clearance_ft = msa_ft - pt.elevation_m / 0.3048;
 
   const next = profile[Math.min(idx + 1, profile.length - 1)];
-  const heading_deg = Math.atan2(next.lon - pt.lon, next.lat - pt.lat) * (180 / Math.PI);
+  const lat_rad = pt.lat * Math.PI / 180;
+  const heading_deg = Math.atan2(
+    (next.lon - pt.lon) * Math.cos(lat_rad),
+    next.lat - pt.lat,
+  ) * (180 / Math.PI);
 
   return {
     lat: pt.lat, lon: pt.lon,
@@ -113,7 +118,7 @@ export function MsaPanel() {
       setMsaProfile(p.profile);
       if (view !== "3d") setView("3d");
     } catch (err) {
-      toast((err as Error).message || "MSA calculation failed.", "error");
+      toast(formatApiError(err, NOTIFY.msaFailed), "error");
     } finally {
       setBusy(false);
     }
@@ -278,6 +283,15 @@ export function MsaPanel() {
             </tbody>
           </table>
         </section>
+      )}
+
+      {/* ── ISA disclaimer ── */}
+      {msaSectors.length > 0 && (
+        <p className="text-[10px] leading-snug text-muted-foreground/70 border-t border-border/40 pt-2">
+          MSA values assume ISA standard atmospheric conditions. In non-standard
+          temperatures (especially cold), apply ICAO Doc&nbsp;8168 cold temperature
+          correction. True altitude may differ significantly from indicated altitude.
+        </p>
       )}
 
       {/* ── Elevation Profile ── */}

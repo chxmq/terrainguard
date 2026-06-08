@@ -66,6 +66,7 @@ profile_default/
 # ══════════════════════════════════════════════════════════════════════════════
 
 node_modules/
+/node_modules/
 frontend/dist/
 dist-ssr/
 .vite/
@@ -94,9 +95,14 @@ backend/data/**/*.tif
 backend/data/**/*.png
 # Keep the data directory in version control even when empty.
 !backend/data/.gitkeep
+# Shipped validation reports (Accidents tab works without re-running CLI first).
+!backend/data/validation_report.json
+!backend/data/validation_report_global.json
 
-# ── Local-only docs (pitch / demo notes, not for the public repo) ──────────────
-docs/
+# ── Runtime logs & local tooling ───────────────────────────────────────────────
+*.log
+logs/
+.cursor/
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Editors / IDEs

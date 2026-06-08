@@ -68,6 +68,24 @@ export interface TawsLookahead {
   }>;
 }
 
+export interface PatchMetrics {
+  ttci_png: string;
+  estd_png: string;
+  corr: number;
+  bounds: { south: number; north: number; west: number; east: number };
+}
+
+export interface CorridorResult {
+  waypoints: number[][];
+  buffer_nm: number;
+  valid_cell_count: number;
+  ttci: { min: number; max: number; mean: number };
+  peak_risk_level: string;
+  peak_risk_color: string;
+  dominant_risk_level: string;
+  dominant_risk_color: string;
+}
+
 export interface ValidationAccident {
   flight: string; date: string; site: string; country: string;
   lat: number; lon: number; fatalities: number; source: string;
@@ -114,7 +132,7 @@ export const api = {
   info: () => jget<Info>("/api/info"),
   activateRegion: (b: Bounds & { zoom?: number; source?: string }) =>
     jpost<ActivateResponse>("/api/region/activate", b),
-  overlayUrl: () => `/api/ttci/overlay.png?t=${Date.now()}`,
+  overlayUrl: (version = 0) => `/api/ttci/overlay.png?v=${version}`,
   regionGridUrl: (b: Bounds & { zoom: number }, rows = 256, cols = 256) =>
     `/api/region/grid?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}&zoom=${b.zoom}&rows=${rows}&cols=${cols}`,
   regionOverlayUrl: (b: Bounds & { zoom: number }) =>
@@ -129,4 +147,9 @@ export const api = {
     ground_speed_kt: number; vertical_speed_fpm?: number;
   }) => jpost<TawsLookahead>("/api/taws/lookahead", b),
   validation: () => jget<Validation>("/api/validation"),
+  validationGlobal: () => jget<Validation>("/api/validation/global"),
+  patchMetrics: (lat: number, lon: number, dim = 64) =>
+    jget<PatchMetrics>(`/api/validation/patch-metrics?lat=${lat}&lon=${lon}&dim=${dim}`),
+  uasCorridor: (waypoints: number[][], buffer_nm: number) =>
+    jpost<CorridorResult>("/api/uas/corridor", { waypoints, buffer_nm }),
 };

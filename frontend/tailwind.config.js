@@ -52,8 +52,16 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ['"IBM Plex Sans"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ['"IBM Plex Mono"', "ui-monospace", "monospace"],
+        sans: ['"Geist"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"Geist Mono"', "ui-monospace", "monospace"],
+      },
+      fontSize: {
+        "2xs": ["0.625rem", { lineHeight: "0.875rem", letterSpacing: "0.04em" }],
+        xs: ["0.75rem", { lineHeight: "1.125rem", letterSpacing: "0.02em" }],
+        sm: ["0.8125rem", { lineHeight: "1.25rem", letterSpacing: "0.015em" }],
+        base: ["0.84375rem", { lineHeight: "1.375rem", letterSpacing: "0.01em" }],
+        lg: ["1.0625rem", { lineHeight: "1.5rem", letterSpacing: "-0.01em" }],
+        xl: ["1.25rem", { lineHeight: "1.625rem", letterSpacing: "-0.02em" }],
       },
       keyframes: {
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },

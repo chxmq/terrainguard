@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Crosshair, Play, Square } from "lucide-react";
 import { api } from "@/lib/api";
 import { useTtci } from "@/state/ttci";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TawsProfileChart } from "@/components/charts";
 import { cn, fmt, fmtInt, destinationPoint } from "@/lib/utils";
+import { formatApiError, NOTIFY } from "@/lib/notifications";
 
 const LEVEL_STYLE: Record<string, string> = {
   WARNING: "border-risk-high/60 bg-risk-high/10 text-risk-high",
@@ -24,6 +25,7 @@ export function TawsPanel() {
   } = useTools();
   const simRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simBusyRef = useRef(false);
+  const [simRunning, setSimRunning] = useState(false);
   const aircraftRef = useRef(aircraft);
   const tawsParamsRef = useRef(tawsParams);
   aircraftRef.current = aircraft;
@@ -34,7 +36,7 @@ export function TawsPanel() {
     try {
       setTawsResult(await api.tawsLookahead({ lat: ac.lat, lon: ac.lon, ...params }));
     } catch (err) {
-      toast((err as Error).message || "Look-ahead failed.", "error");
+      toast(formatApiError(err, NOTIFY.tawsFailed), "error");
       stopSim();
     }
   };
@@ -53,6 +55,7 @@ export function TawsPanel() {
       simRef.current = null;
     }
     simBusyRef.current = false;
+    setSimRunning(false);
   };
   useEffect(() => () => stopSim(), []);
 
@@ -96,6 +99,7 @@ export function TawsPanel() {
       }
     };
 
+    setSimRunning(true);
     simRef.current = setTimeout(tick, SIM_INTERVAL_MS);
   };
 
@@ -132,19 +136,19 @@ export function TawsPanel() {
         <SectionHead>Aircraft State</SectionHead>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Altitude (ft)">
-            <Input type="number" step={500} value={tawsParams.altitude_ft}
+            <Input className="font-mono tabular-nums" type="number" step={500} value={tawsParams.altitude_ft}
               onChange={(e) => update({ altitude_ft: Number(e.target.value) })} />
           </Field>
           <Field label="Heading (°)">
-            <Input type="number" step={5} value={tawsParams.heading_deg}
+            <Input className="font-mono tabular-nums" type="number" step={5} value={tawsParams.heading_deg}
               onChange={(e) => update({ heading_deg: Number(e.target.value) })} />
           </Field>
           <Field label="Ground speed (kt)">
-            <Input type="number" step={10} value={tawsParams.ground_speed_kt}
+            <Input className="font-mono tabular-nums" type="number" step={10} value={tawsParams.ground_speed_kt}
               onChange={(e) => update({ ground_speed_kt: Number(e.target.value) })} />
           </Field>
           <Field label="Vert speed (fpm)">
-            <Input type="number" step={100} value={tawsParams.vertical_speed_fpm}
+            <Input className="font-mono tabular-nums" type="number" step={100} value={tawsParams.vertical_speed_fpm}
               onChange={(e) => update({ vertical_speed_fpm: Number(e.target.value) })} />
           </Field>
         </div>
@@ -168,7 +172,7 @@ export function TawsPanel() {
             Clear
           </Button>
           <Button size="sm" disabled={!aircraft} onClick={toggleSim}>
-            {simRef.current !== null
+            {simRunning
               ? <><Square className="h-3.5 w-3.5" /> Stop</>
               : <><Play  className="h-3.5 w-3.5" /> Simulate</>}
           </Button>

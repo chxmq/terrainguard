@@ -1,19 +1,18 @@
-import { createContext, useContext, useEffect } from "react";
+import { useEffect } from "react";
+import { applyThemeImmediate, getThemeMode } from "@/lib/theme";
 
-type Theme = "dark";
-type ThemeContextValue = { theme: Theme };
-
-const ThemeContext = createContext<ThemeContextValue>({ theme: "dark" });
-
+/** Applies saved theme on load and reacts to OS changes in system mode. */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    document.documentElement.classList.add("dark");
-    document.documentElement.classList.remove("light");
+    applyThemeImmediate(getThemeMode());
+
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemChange = () => {
+      if (getThemeMode() === "system") applyThemeImmediate("system");
+    };
+    mq.addEventListener("change", onSystemChange);
+    return () => mq.removeEventListener("change", onSystemChange);
   }, []);
 
-  return <ThemeContext.Provider value={{ theme: "dark" }}>{children}</ThemeContext.Provider>;
-}
-
-export function useTheme() {
-  return useContext(ThemeContext);
+  return children;
 }

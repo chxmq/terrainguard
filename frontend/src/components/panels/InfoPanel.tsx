@@ -3,9 +3,9 @@ import { fmt, fmtInt } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
 const STEPS = [
-  "Use Select area (top-left of map) or pick a preset region.",
+  "Use Select area (top-left of map) to draw a region to assess.",
   "Click anywhere on the map to see terrain complexity and elevation.",
-  "Open Route or Alerts in this sidebar for flight-planning tools.",
+  "Open Route, Alerts, or UAS in this sidebar for flight-planning tools.",
 ];
 
 export function InfoPanel() {

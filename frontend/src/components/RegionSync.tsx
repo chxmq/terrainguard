@@ -18,8 +18,8 @@ export function RegionSync() {
     if (prevKey.current && prevKey.current !== key) {
       resetForNewRegion();
       setLastQuery(null);
+      setDemSource(activeRegion.source);
     }
-    setDemSource(activeRegion.source);
     prevKey.current = key;
   }, [activeRegion, resetForNewRegion, setDemSource, setLastQuery]);
 

@@ -4,16 +4,16 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md border font-sans text-sm font-medium tracking-[0.01em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
-        destructive: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
-        outline: "border border-border bg-transparent hover:bg-secondary",
-        secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        ghost: "hover:bg-secondary hover:text-foreground",
-        link: "text-foreground underline-offset-4 hover:underline",
+        default: "border-primary/80 bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+        destructive: "border-destructive/80 bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        outline: "border-border bg-card/60 text-foreground shadow-sm hover:border-foreground/25 hover:bg-secondary",
+        secondary: "border-border bg-secondary text-secondary-foreground shadow-sm hover:border-foreground/20 hover:bg-secondary/80",
+        ghost: "border-transparent text-muted-foreground hover:border-border hover:bg-secondary hover:text-foreground",
+        link: "border-transparent text-foreground underline-offset-4 hover:underline",
       },
       size: {
         default: "h-9 px-4 py-2",

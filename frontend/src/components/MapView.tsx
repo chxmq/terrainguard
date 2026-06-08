@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import {
   MapContainer, TileLayer, ImageOverlay, CircleMarker, Marker, Polyline, Rectangle, Popup, Tooltip,
-  useMap, useMapEvents,
+  ZoomControl, useMap, useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet-draw";
@@ -11,20 +11,49 @@ import { Pencil } from "lucide-react";
 import { api, type Bounds } from "@/lib/api";
 import { useTtci, riskColor } from "@/state/ttci";
 import { useTools } from "@/state/tools";
-import { Button } from "@/components/ui/button";
 import { MsaProfileChart } from "@/components/charts";
 import { cn, fmt, fmtInt } from "@/lib/utils";
+import { formatApiError, NOTIFY, regionTooLargeMessage } from "@/lib/notifications";
 
-const PRESETS: Array<{ name: string; bbox: Bounds }> = [
-  { name: "Ladakh",      bbox: { south: 33.8, north: 34.5, west: 76.8, east: 77.8 } },
-  { name: "Mont Blanc",  bbox: { south: 45.7, north: 46.1, west: 6.7,  east: 7.3  } },
-  { name: "Everest",     bbox: { south: 27.8, north: 28.1, west: 86.7, east: 87.0 } },
-  { name: "Andes (Cusco)", bbox: { south: -13.3, north: -13.0, west: -72.7, east: -72.4 } },
-  { name: "Mt Rainier",  bbox: { south: 46.7, north: 47.0, west: -121.9, east: -121.6 } },
-];
 const TILE_URL_LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
-const TILE_URL_DARK  = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const TILE_URL_DARK = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 const BUF_DEG = 0.0834;
+const MAX_REGION_SPAN_DEG = 12;
+const WORLD_BOUNDS = L.latLngBounds(L.latLng(-85, -180), L.latLng(85, 180));
+const WORLD_CENTER: [number, number] = [0, 0];
+const WORLD_ZOOM = 2;
+
+function frameMinZoom(map: L.Map): number {
+  return map.getBoundsZoom(WORLD_BOUNDS, false);
+}
+
+function clampMapToFrame(map: L.Map) {
+  const minZoom = frameMinZoom(map);
+  map.setMinZoom(minZoom);
+  if (map.getZoom() < minZoom) {
+    map.setZoom(minZoom, { animate: false });
+  }
+  map.panInsideBounds(WORLD_BOUNDS, { animate: false });
+}
+
+/** Persists across MapView remounts (2D ↔ 3D) so reopening 2D does not re-zoom. */
+let fittedRegionKey: string | null = null;
+
+const MODE_HINTS: Record<string, string> = {
+  "draw-area": "Drag a box around the terrain you want to analyze · Esc to cancel",
+  "draw-route": "Click on the map to place waypoints · double-click to finish",
+  "draw-corridor": "Click to place UAS corridor waypoints · double-click to finish",
+  "place-aircraft": "Click the map to place the aircraft",
+  "place-history-pin": "Click the map to drop a history pin · Esc to cancel",
+};
+
+function spanTooLarge(b: Bounds): boolean {
+  return (b.north - b.south) > MAX_REGION_SPAN_DEG || (b.east - b.west) > MAX_REGION_SPAN_DEG;
+}
+
+function spanErrorMessage(b: Bounds): string {
+  return regionTooLargeMessage(b.north - b.south, b.east - b.west, MAX_REGION_SPAN_DEG);
+}
 
 // ── Computing progress steps shown during TTCI calculation ──
 const COMPUTE_STEPS = [
@@ -133,15 +162,86 @@ function useTerrainAudio() {
   return { trigger };
 }
 
+function InvalidateOnLayout() {
+  const map = useMap();
+  const { sidebarOpen } = useTools();
+  useEffect(() => {
+    const id = window.setTimeout(() => map.invalidateSize(), 220);
+    return () => window.clearTimeout(id);
+  }, [sidebarOpen, map]);
+  return null;
+}
+
+/** Exposes live Leaflet center/zoom so 2D → 3D can fly the globe to the same view. */
+function MapViewPoseRegistrar() {
+  const map = useMap();
+  const { registerMapViewGetter } = useTools();
+
+  useEffect(() => {
+    registerMapViewGetter(() => {
+      const c = map.getCenter();
+      return { lat: c.lat, lon: c.lng, zoom: map.getZoom() };
+    });
+    return () => registerMapViewGetter(null);
+  }, [map, registerMapViewGetter]);
+
+  return null;
+}
+
+function LockWorldBounds() {
+  const map = useMap();
+  const { sidebarOpen } = useTools();
+  useEffect(() => {
+    const apply = () => {
+      map.setMaxBounds(WORLD_BOUNDS);
+      map.options.maxBoundsViscosity = 1;
+      clampMapToFrame(map);
+    };
+    apply();
+    map.on("resize", apply);
+    map.on("zoomend", apply);
+    map.on("moveend", apply);
+    return () => {
+      map.off("resize", apply);
+      map.off("zoomend", apply);
+      map.off("moveend", apply);
+    };
+  }, [map, sidebarOpen]);
+  return null;
+}
+
+function ApplyMapFocus() {
+  const map = useMap();
+  const { pendingMapFocus, consumeMapFocus } = useTools();
+  useEffect(() => {
+    if (!pendingMapFocus) return;
+    map.setView(
+      [pendingMapFocus.lat, pendingMapFocus.lon],
+      Math.max(pendingMapFocus.zoom, map.getMinZoom()),
+      { animate: false },
+    );
+    consumeMapFocus();
+  }, [pendingMapFocus, map, consumeMapFocus]);
+  return null;
+}
+
+/** Zoom to a newly activated region only — not when reopening the 2D map. */
 function FitToRegion() {
   const { activeRegion } = useTtci();
   const map = useMap();
   useEffect(() => {
-    if (activeRegion)
-      map.fitBounds(
-        [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
-        { padding: [24, 24] },
-      );
+    if (!activeRegion) {
+      fittedRegionKey = null;
+      return;
+    }
+    const key = `${activeRegion.south},${activeRegion.north},${activeRegion.west},${activeRegion.east},${activeRegion.zoom}`;
+    if (fittedRegionKey === key) return;
+    fittedRegionKey = key;
+    map.fitBounds(
+      [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
+      { padding: [24, 24] },
+    );
+    window.requestAnimationFrame(() => clampMapToFrame(map));
   }, [activeRegion, map]);
   return null;
 }
@@ -151,9 +251,9 @@ function TileLayerThemed() {
     document.documentElement.classList.contains("dark"),
   );
   useEffect(() => {
-    const observer = new MutationObserver(() =>
-      setDark(document.documentElement.classList.contains("dark")),
-    );
+    const observer = new MutationObserver(() => {
+      setDark(document.documentElement.classList.contains("dark"));
+    });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     return () => observer.disconnect();
   }, []);
@@ -163,16 +263,22 @@ function TileLayerThemed() {
       subdomains="abcd"
       attribution="&copy; OpenStreetMap &copy; CARTO"
       maxZoom={18}
+      noWrap
     />
   );
 }
 
 function ClickLayer() {
   const { activeRegion, setLastQuery, lastQuery, toast } = useTtci();
-  const { mode, setMode, setAircraft } = useTools();
+  const { mode, setMode, setAircraft, showTawsTab, addHistoryPin } = useTools();
   useMapEvents({
     click: async (e) => {
-      if (mode === "place-aircraft") {
+      if (mode === "place-history-pin") {
+        addHistoryPin(e.latlng.lat, e.latlng.lng);
+        setMode("idle");
+        return;
+      }
+      if (mode === "place-aircraft" && showTawsTab) {
         setAircraft({ lat: e.latlng.lat, lon: e.latlng.lng });
         setMode("idle");
         return;
@@ -181,7 +287,7 @@ function ClickLayer() {
       try {
         setLastQuery(await api.query(e.latlng.lat, e.latlng.lng));
       } catch (err) {
-        toast((err as Error).message || "Point query failed.", "error");
+        toast(formatApiError(err, NOTIFY.pointQueryFailed), "error");
       }
     },
   });
@@ -206,28 +312,65 @@ function ClickLayer() {
   );
 }
 
+function drawVertexIcon(accent: string) {
+  return L.divIcon({
+    className: "tg-draw-vertex",
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    html: `<span class="tg-draw-vertex-dot" style="--tg-vertex:${accent}"></span>`,
+  });
+}
+
 function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
   const map = useMap();
-  const { mode, setMode, setRouteWaypoints } = useTools();
+  const { toast, status } = useTtci();
+  const { mode, setMode, setRouteWaypoints, setCorridorWaypoints, showMsaTab, showUasTab } = useTools();
   useEffect(() => {
-    if (mode !== "draw-area" && mode !== "draw-route") return;
+    if (status === "computing") return;
+    if (mode === "draw-route" && !showMsaTab) return;
+    if (mode === "draw-corridor" && !showUasTab) return;
+    if (mode !== "draw-area" && mode !== "draw-route" && mode !== "draw-corridor") return;
     const LD = (L as any).Draw;
+    const areaIcon = drawVertexIcon("#06b6d4");
+    const routeIcon = drawVertexIcon("#3b82f6");
+    const corridorIcon = drawVertexIcon("#a855f7");
     const handler =
       mode === "draw-area"
         ? new LD.Rectangle(map, {
+            showArea: false,
+            icon: areaIcon,
+            touchIcon: areaIcon,
             shapeOptions: { color: "#06b6d4", weight: 2, fillColor: "#06b6d4", fillOpacity: 0.05 },
           })
         : new LD.Polyline(map, {
-            shapeOptions: { color: "#3b82f6", weight: 3, dashArray: "8,6" },
+            showLength: false,
+            icon: mode === "draw-corridor" ? corridorIcon : routeIcon,
+            touchIcon: mode === "draw-corridor" ? corridorIcon : routeIcon,
+            shapeOptions: {
+              color: mode === "draw-corridor" ? "#a855f7" : "#3b82f6",
+              weight: 3,
+              dashArray: "8,6",
+            },
             maxPoints: 50,
           });
     handler.enable();
     const onCreated = (e: any) => {
       if (mode === "draw-area") {
         const b = e.layer.getBounds();
-        onArea({ south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() });
+        const bbox = { south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() };
+        if (spanTooLarge(bbox)) {
+          map.removeLayer(e.layer);
+          setMode("idle");
+          toast(spanErrorMessage(bbox), "error");
+          return;
+        }
+        map.removeLayer(e.layer);
+        onArea(bbox);
       } else {
-        setRouteWaypoints(e.layer.getLatLngs().map((ll: any) => [ll.lat, ll.lng]));
+        const wps = e.layer.getLatLngs().map((ll: any) => [ll.lat, ll.lng] as [number, number]);
+        map.removeLayer(e.layer);
+        if (mode === "draw-corridor") setCorridorWaypoints(wps);
+        else setRouteWaypoints(wps);
         setMode("idle");
       }
     };
@@ -236,7 +379,7 @@ function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
       map.off((L as any).Draw.Event.CREATED, onCreated);
       try { handler.disable(); } catch { /* noop */ }
     };
-  }, [mode, map, onArea, setMode, setRouteWaypoints]);
+  }, [mode, map, onArea, setMode, setRouteWaypoints, setCorridorWaypoints, toast, showMsaTab, showUasTab, status]);
   return null;
 }
 
@@ -287,24 +430,109 @@ function MsaLayers() {
   );
 }
 
-/** Animated rotated aircraft icon following the Fly Route simulation. */
-function FlyRouteLayers() {
-  const { flyPosition } = useTools();
-  if (!flyPosition) return null;
+function CorridorLayers() {
+  const { corridorWaypoints, corridorSegments } = useTools();
 
-  const { clearance_ft, heading_deg } = flyPosition;
-  const fillColor =
-    clearance_ft < 1500 ? "#e74c3c"
-    : clearance_ft < 3000 ? "#e67e22"
-    : "#2ecc71";
-  const glowAlpha = clearance_ft < 1500 ? "0.55" : clearance_ft < 3000 ? "0.4" : "0.35";
-  const glow = fillColor.replace("#", "");
-  const r = parseInt(glow.slice(0, 2), 16);
-  const g = parseInt(glow.slice(2, 4), 16);
-  const b = parseInt(glow.slice(4, 6), 16);
-  const glowRgba = `rgba(${r},${g},${b},${glowAlpha})`;
+  const wpMarkers = corridorWaypoints.map(([la, lo], i) => (
+    <CircleMarker
+      key={`cw${i}`}
+      center={[la, lo]}
+      radius={5}
+      pathOptions={{ color: "#7c3aed", weight: 2, fillColor: "#a855f7", fillOpacity: 1 }}
+    >
+      <Tooltip direction="top">{i + 1}</Tooltip>
+    </CircleMarker>
+  ));
 
-  const html = `
+  if (corridorSegments && corridorSegments.length > 0) {
+    return (
+      <>
+        {corridorSegments.map((seg) => (
+          <Polyline
+            key={`cors${seg.segIdx}`}
+            positions={[seg.from, seg.to]}
+            pathOptions={{ color: seg.result.dominant_risk_color, weight: 6, opacity: 0.88, lineCap: "round" }}
+          >
+            <Popup>
+              <div className="font-sans text-xs">
+                <div className="font-semibold">Segment {seg.segIdx + 1}</div>
+                <div>Risk: <strong style={{ color: seg.result.dominant_risk_color }}>{seg.result.dominant_risk_level}</strong></div>
+                <div>TTCI: {seg.result.ttci.mean.toFixed(3)}</div>
+                <div>Length: {seg.distKm.toFixed(1)} km</div>
+              </div>
+            </Popup>
+          </Polyline>
+        ))}
+        {wpMarkers}
+      </>
+    );
+  }
+
+  if (corridorWaypoints.length < 2) return null;
+
+  return (
+    <>
+      <Polyline
+        positions={corridorWaypoints.map(([la, lo]) => [la, lo])}
+        pathOptions={{ color: "#a855f7", weight: 4, dashArray: "10,8", opacity: 0.9 }}
+      />
+      {wpMarkers}
+    </>
+  );
+}
+
+function MapModeBanner() {
+  const { mode } = useTools();
+  if (mode === "idle") return null;
+  const hint = MODE_HINTS[mode];
+  if (!hint) return null;
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-16 z-[700] -translate-x-1/2 panel-float px-4 py-2.5 text-body-sm font-medium text-foreground">
+      {hint}
+    </div>
+  );
+}
+
+function HistoryLayers() {
+  const { historyItems, selectedHistoryId, setSelectedHistoryId } = useTools();
+
+  return (
+    <>
+      {historyItems.map((item) => {
+        if (item.lat == null || item.lon == null) return null;
+        const selected = selectedHistoryId === item.id;
+        return (
+          <CircleMarker
+            key={item.id}
+            center={[item.lat, item.lon]}
+            radius={selected ? 9 : 7}
+            pathOptions={{
+              color: "#fff",
+              weight: selected ? 3 : 2,
+              fillColor: selected ? "#38bdf8" : "#f59e0b",
+              fillOpacity: 1,
+            }}
+            eventHandlers={{ click: () => setSelectedHistoryId(item.id) }}
+          >
+            <Popup>
+              <div className="font-sans text-xs">
+                <div className="font-semibold">{item.title}</div>
+                {item.body && <div className="mt-1 text-muted-foreground">{item.body}</div>}
+                <div className="mt-1 tabular-nums text-[10px] text-muted-foreground">
+                  {fmt(item.lat, 4)}°, {fmt(item.lon, 4)}°
+                </div>
+              </div>
+            </Popup>
+            <Tooltip direction="top">{item.title}</Tooltip>
+          </CircleMarker>
+        );
+      })}
+    </>
+  );
+}
+
+function aircraftIconHtml(heading_deg: number, fillColor: string, glowRgba: string) {
+  return `
     <div style="position:relative;width:44px;height:44px">
       <div style="position:absolute;top:50%;left:50%;width:44px;height:44px;
         transform:translate(-50%,-50%);border-radius:50%;background:${glowRgba}"></div>
@@ -314,10 +542,74 @@ function FlyRouteLayers() {
           fill="${fillColor}" stroke="rgba(255,255,255,0.95)" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
     </div>`;
+}
 
-  const icon = L.divIcon({ html, className: "", iconSize: [44, 44], iconAnchor: [22, 22] });
+/** Imperative marker — updates position without rebuilding icon every tick. */
+function FlyAircraftMarker({
+  lat, lon, heading_deg, fillColor,
+}: {
+  lat: number; lon: number; heading_deg: number; fillColor: string;
+}) {
+  const map = useMap();
+  const markerRef = useRef<L.Marker | null>(null);
+  const styleKeyRef = useRef("");
 
-  return <Marker position={[flyPosition.lat, flyPosition.lon]} icon={icon} />;
+  const glowAlpha = fillColor === "#e74c3c" ? "0.55" : fillColor === "#e67e22" ? "0.4" : "0.35";
+  const hex = fillColor.replace("#", "");
+  const glowRgba = `rgba(${parseInt(hex.slice(0, 2), 16)},${parseInt(hex.slice(2, 4), 16)},${parseInt(hex.slice(4, 6), 16)},${glowAlpha})`;
+  const styleKey = `${heading_deg}|${fillColor}`;
+
+  useEffect(() => {
+    if (!markerRef.current) {
+      const icon = L.divIcon({
+        html: aircraftIconHtml(heading_deg, fillColor, glowRgba),
+        className: "",
+        iconSize: [44, 44],
+        iconAnchor: [22, 22],
+      });
+      markerRef.current = L.marker([lat, lon], { icon }).addTo(map);
+      styleKeyRef.current = styleKey;
+    } else {
+      markerRef.current.setLatLng([lat, lon]);
+      if (styleKeyRef.current !== styleKey) {
+        markerRef.current.setIcon(L.divIcon({
+          html: aircraftIconHtml(heading_deg, fillColor, glowRgba),
+          className: "",
+          iconSize: [44, 44],
+          iconAnchor: [22, 22],
+        }));
+        styleKeyRef.current = styleKey;
+      }
+    }
+  }, [lat, lon, heading_deg, fillColor, glowRgba, styleKey, map]);
+
+  useEffect(() => () => {
+    markerRef.current?.remove();
+    markerRef.current = null;
+  }, [map]);
+
+  return null;
+}
+
+/** Animated rotated aircraft icon following the Fly Route simulation. */
+function FlyRouteLayers() {
+  const { flyPosition } = useTools();
+  if (!flyPosition) return null;
+
+  const { clearance_ft, heading_deg, lat, lon } = flyPosition;
+  const fillColor =
+    clearance_ft < 1500 ? "#e74c3c"
+    : clearance_ft < 3000 ? "#e67e22"
+    : "#2ecc71";
+
+  return (
+    <FlyAircraftMarker
+      lat={lat}
+      lon={lon}
+      heading_deg={heading_deg}
+      fillColor={fillColor}
+    />
+  );
 }
 
 function clearanceColor(ft: number, env: { warning_clearance_ft: number; caution_clearance_ft: number }) {
@@ -678,51 +970,68 @@ function WarningOverlay() {
 }
 
 export function MapView() {
-  const { status, activeRegion, overlayVersion, activate, toast } = useTtci();
-  const { mode, setMode, view, setView, overlayOpacity, showOverlay } = useTools();
-  const [source, setSource] = useState("tiles");
+  const { status, activeRegion, overlayVersion, activate } = useTtci();
+  const {
+    mode, setMode, toggleDrawArea, view, setView,
+    overlayOpacity, showOverlay, demSource,
+    showMsaTab, showTawsTab, showUasTab,
+  } = useTools();
+  const drawingArea = mode === "draw-area";
   const onAreaRef = useRef<(b: Bounds) => void>(() => {});
 
-  // Step-by-step compute progress
   const computing = status === "computing";
   const { step, done } = useComputeProgress(computing);
+  const overlayUrl = useMemo(
+    () => api.overlayUrl(overlayVersion),
+    [overlayVersion],
+  );
 
   onAreaRef.current = async (b: Bounds) => {
     setMode("idle");
-    try { await activate(b, source); } catch { /* handled */ }
+    try { await activate(b, demSource); } catch { /* surfaced via activate */ }
   };
-
-  const showPrompt = status === "empty" || (!activeRegion && status !== "computing");
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer center={[25, 82]} zoom={3} className="h-full w-full" zoomControl attributionControl>
+      <MapContainer
+        center={WORLD_CENTER}
+        zoom={WORLD_ZOOM}
+        className="h-full w-full overflow-hidden"
+        zoomControl={false}
+        attributionControl
+        maxBounds={WORLD_BOUNDS}
+        maxBoundsViscosity={1}
+        worldCopyJump={false}
+      >
+        <ZoomControl position="topright" />
+        <InvalidateOnLayout />
+        <MapViewPoseRegistrar />
+        <LockWorldBounds />
         <TileLayerThemed />
         {activeRegion && showOverlay && (
           <ImageOverlay
             key={overlayVersion}
-            url={api.overlayUrl()}
+            url={overlayUrl}
             bounds={[[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]]}
             opacity={overlayOpacity}
           />
         )}
         <FitToRegion />
+        <ApplyMapFocus />
         <ClickLayer />
         <DrawController onArea={(b) => onAreaRef.current(b)} />
-        <MsaLayers />
-        <FlyRouteLayers />
-        <TawsLayers />
+        {showMsaTab && <MsaLayers />}
+        {showUasTab && <CorridorLayers />}
+        {showMsaTab && <FlyRouteLayers />}
+        {showTawsTab && <TawsLayers />}
+        <HistoryLayers />
         <CfitLayers />
       </MapContainer>
 
-      {/* Pilot HUD */}
-      <PilotHUD />
-
-      {/* Cockpit strip */}
-      <CockpitStrip />
-
-      {/* WARNING / CAUTION overlay with audio */}
-      <WarningOverlay />
+      <MapModeBanner />
+      {showMsaTab && <PilotHUD />}
+      {showMsaTab && <CockpitStrip />}
+      {showMsaTab && <WarningOverlay />}
 
       {/* Risk legend */}
       <RiskLegend />
@@ -730,62 +1039,27 @@ export function MapView() {
       {/* Map / Globe view toggle */}
       <button
         onClick={() => setView(view === "2d" ? "3d" : "2d")}
-        className="absolute bottom-7 right-3 z-[700] rounded border border-border bg-card/90 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground shadow backdrop-blur transition-colors hover:border-primary hover:text-primary"
+        className="absolute bottom-7 right-3 z-[700] rounded border border-border bg-card/90 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground shadow backdrop-blur transition-colors hover:border-foreground/25 hover:text-foreground"
       >
         {view === "3d" ? "2D Map" : "3D Globe"}
       </button>
 
       <button
-        onClick={() => {
-          setMode("draw-area");
-          toast("Drag a box on the map to select the area to assess.", "info");
-        }}
-        className="absolute left-3 top-3 z-[700] flex items-center gap-2 rounded-md border border-border bg-card/90 px-3 py-2 text-xs font-semibold shadow-md backdrop-blur transition-colors hover:border-primary hover:text-primary"
+        type="button"
+        aria-pressed={drawingArea}
+        disabled={computing}
+        onClick={toggleDrawArea}
+        className={cn(
+          "absolute left-3 top-3 z-[700] flex items-center gap-2 panel-float px-3.5 py-2 text-xs font-semibold transition-all",
+          computing && "cursor-not-allowed opacity-50",
+          drawingArea
+            ? "border-foreground/30 bg-foreground/10 text-foreground ring-2 ring-foreground/20"
+            : "border-border text-muted-foreground hover:border-foreground/20 hover:text-foreground",
+        )}
       >
-        <Pencil className="h-3.5 w-3.5" /> Select area
+        <Pencil className={cn("h-3.5 w-3.5", drawingArea && "text-foreground")} />
+        {drawingArea ? "Cancel selection" : "Select area"}
       </button>
-
-      {showPrompt && (
-        <div className="absolute inset-0 z-[680] flex items-center justify-center bg-background/55 backdrop-blur-sm">
-          <div className="w-[min(460px,calc(100%-48px))] rounded-lg border border-border bg-card p-7 text-center shadow-lg">
-            <h2 className="mb-2 bg-gradient-to-r from-primary to-risk-critical bg-clip-text text-xl font-extrabold text-transparent">
-              Assess any terrain on Earth
-            </h2>
-            <p className="mb-5 text-sm text-muted-foreground">
-              Draw a box on the map to compute the Terrain Topography Complexity Index for that
-              area — or jump to a preset region below.
-            </p>
-            <div className="mb-4 flex items-center justify-center gap-2">
-              <Button onClick={() => { setMode("draw-area"); toast("Drag a box on the map to select the area.", "info"); }}>
-                <Pencil className="h-4 w-4" /> Draw area on map
-              </Button>
-              <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                DEM
-                <select
-                  value={source}
-                  onChange={(e) => setSource(e.target.value)}
-                  className="h-9 rounded-md border border-input bg-background px-2 text-sm"
-                >
-                  <option value="tiles">SRTM 30 m</option>
-                  <option value="copernicus">Copernicus GLO-30</option>
-                </select>
-              </label>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <span className="text-xs text-muted-foreground">Presets:</span>
-              {PRESETS.map((p) => (
-                <button
-                  key={p.name}
-                  onClick={() => activate(p.bbox, source).catch(() => {})}
-                  className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary"
-                >
-                  {p.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Step-by-step compute progress overlay ── */}
       {computing && (
@@ -807,7 +1081,7 @@ export function MapView() {
                       done[i]
                         ? "border-emerald-500 bg-emerald-500 text-white"
                         : i === step
-                        ? "animate-pulse border-primary bg-primary/20 text-primary"
+                        ? "animate-pulse border-foreground/40 bg-foreground/10 text-foreground"
                         : "border-border bg-secondary",
                     )}
                   >
@@ -816,7 +1090,7 @@ export function MapView() {
                   <span
                     className={cn(
                       "font-mono text-[11px]",
-                      done[i] ? "text-emerald-600 line-through" : i === step ? "text-primary font-semibold" : "text-muted-foreground",
+                      done[i] ? "text-emerald-600 line-through" : i === step ? "font-semibold text-foreground" : "text-muted-foreground",
                     )}
                   >
                     {s}

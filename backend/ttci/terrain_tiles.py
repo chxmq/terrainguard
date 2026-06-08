@@ -22,7 +22,10 @@ References:
 
 from __future__ import annotations
 
+import logging
 import math
+
+logger = logging.getLogger(__name__)
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -232,7 +235,7 @@ def download_terrain_dem(
 
     valid = np.isfinite(destination)
     if valid.any():
-        print(
+        logger.info(
             f"🛰️  Real DEM acquired: {destination.shape} from {fetched}/{tile_count} "
             f"tiles @ z{zoom}, range "
             f"[{np.nanmin(destination):.0f}, {np.nanmax(destination):.0f}] m, "

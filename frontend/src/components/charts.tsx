@@ -53,7 +53,7 @@ export function MsaProfileChart({ profile, sectors, flyDistKm, className }: MsaP
       const yS = (m: number) => pad.top + plotH - ((m - minE) / span) * plotH;
 
       // Grid lines + axis labels
-      ctx.font = '9px "JetBrains Mono", monospace';
+      ctx.font = '500 9px "Geist Mono", ui-monospace, monospace';
       for (let i = 0; i <= 5; i++) {
         const y = pad.top + (plotH / 5) * i;
         ctx.strokeStyle = "rgba(128,128,128,0.15)";
@@ -117,7 +117,7 @@ export function MsaProfileChart({ profile, sectors, flyDistKm, className }: MsaP
 
       // MSA line + label per sector
       cursor = 0;
-      ctx.font = '9px "JetBrains Mono", monospace';
+      ctx.font = '500 9px "Geist Mono", ui-monospace, monospace';
       sectors.forEach((s) => {
         const x1 = xS(cursor);
         cursor += s.distance_km;
@@ -182,7 +182,7 @@ export function MsaProfileChart({ profile, sectors, flyDistKm, className }: MsaP
         ctx.fill();
 
         // Aircraft icon above the playhead
-        ctx.font = "13px sans-serif";
+        ctx.font = '600 13px "Geist", system-ui, sans-serif';
         ctx.textAlign = "center";
         ctx.fillStyle = "#fff";
         ctx.fillText("✈", x, pad.top + 13);
@@ -190,7 +190,7 @@ export function MsaProfileChart({ profile, sectors, flyDistKm, className }: MsaP
 
       // X-axis label
       ctx.fillStyle = "#94a3b8";
-      ctx.font = "10px Inter, sans-serif";
+      ctx.font = '500 10px "Geist", system-ui, sans-serif';
       ctx.textAlign = "center";
       ctx.fillText("Distance (km)", W / 2, H - 6);
     },
@@ -225,7 +225,7 @@ export function TawsProfileChart({ result }: { result: TawsLookahead }) {
       const xS = (d: number) => pad.left + (d / maxDist) * plotW;
       const yS = (ft: number) => pad.top + plotH - ((ft - minY) / span) * plotH;
 
-      ctx.font = '9px "JetBrains Mono", monospace';
+      ctx.font = '500 9px "Geist Mono", ui-monospace, monospace';
       for (let i = 0; i <= 4; i++) {
         const y = pad.top + (plotH / 4) * i;
         ctx.strokeStyle = "rgba(128,128,128,0.18)";
@@ -277,7 +277,7 @@ export function TawsProfileChart({ result }: { result: TawsLookahead }) {
       }
 
       ctx.fillStyle = "#94a3b8";
-      ctx.font = "10px Inter, sans-serif";
+      ctx.font = '500 10px "Geist", system-ui, sans-serif';
       ctx.textAlign = "center";
       ctx.fillText("Distance ahead (NM)", W / 2, H - 5);
     },

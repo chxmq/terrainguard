@@ -310,6 +310,206 @@ def run_validation(zoom: int = 11) -> Dict:
     return {"summary": summary, "accidents": per_site}
 
 
+# ---------------------------------------------------------------------------
+# Global-control validation (additive — nothing above is modified)
+# ---------------------------------------------------------------------------
+
+# Eight diverse terrain reference regions: (label, center_lat, center_lon).
+# Together they span flat plains, low hills, high mountains, desert, and
+# coastal terrain across five continents, so global controls are not biased
+# toward any single terrain type.
+GLOBAL_REFERENCE_REGIONS = [
+    ("Kansas Plains",      38.00,  -98.00),  # flat prairie
+    ("Netherlands",        52.25,    5.25),  # coastal, very flat
+    ("Scotland Highlands", 57.25,   -4.50),  # moderate hills
+    ("Swiss Alps",         46.50,    8.50),  # high mountain
+    ("Nepal Himalaya",     28.00,   86.00),  # extreme elevation
+    ("Atacama Desert",    -22.50,  -69.00),  # arid high plateau
+    ("Australian Outback", -27.50,  137.50), # low-elevation plains
+    ("Patagonia",          -50.50,  -72.00), # subantarctic mountains
+]
+
+GLOBAL_CONTROLS_PER_REGION = 400  # sampled cells per reference region
+GLOBAL_RANDOM_SEED = 43           # independent of local-control seed (42)
+
+
+def _sample_global_controls(
+    zoom: int,
+    rng: np.random.Generator,
+    controls_per_region: int = GLOBAL_CONTROLS_PER_REGION,
+) -> Dict:
+    """Download one DEM patch per global reference region and sample TTCI cells.
+
+    Returns a dict with concatenated arrays ``controls_cell``,
+    ``controls_nbhd``, ``metric_controls`` (per-metric), and a
+    ``sampled_regions`` metadata list.  Regions for which the DEM download
+    fails are skipped with a warning.
+    """
+    metric_names = ["ttci", "slope", "tri", "curvature", "elevation_std"]
+    all_cells: List[np.ndarray] = []
+    all_nbhd: List[np.ndarray] = []
+    metric_chunks: Dict[str, List[np.ndarray]] = {m: [] for m in metric_names}
+    sampled_regions: List[Dict] = []
+
+    for name, lat, lon in GLOBAL_REFERENCE_REGIONS:
+        half = PATCH_HALF_DEG
+        bbox = (lat - half, lat + half, lon - half, lon + half)
+        try:
+            patch = download_terrain_dem(bbox, zoom=zoom)
+        except Exception as exc:  # noqa: BLE001
+            print(f"⚠️  Skipping global region {name}: DEM unavailable ({exc})")
+            continue
+
+        result = compute_ttci(patch.elevation, cell_size=patch.cell_size_m)
+        ttci = result["ttci"]
+
+        valid = ~np.isnan(ttci)
+        radius_px = max(1, int(round(SITE_RADIUS_KM * 1000.0 / patch.cell_size_m)))
+        nbhd = _neighbourhood_max(ttci, radius_px)
+
+        pool_idx = np.flatnonzero(valid.reshape(-1))
+        n_available = pool_idx.size
+        if n_available > controls_per_region:
+            pool_idx = rng.choice(pool_idx, controls_per_region, replace=False)
+
+        all_cells.append(ttci.reshape(-1)[pool_idx])
+        all_nbhd.append(nbhd.reshape(-1)[pool_idx])
+
+        metric_surfaces = {
+            "ttci":          ttci,
+            "slope":         result["slope_norm"],
+            "tri":           result["tri_norm"],
+            "curvature":     result["curvature_norm"],
+            "elevation_std": result["elevation_std_norm"],
+        }
+        for mname, surf in metric_surfaces.items():
+            metric_chunks[mname].append(surf.reshape(-1)[pool_idx])
+
+        n_sampled = pool_idx.size
+        mean_ttci = float(np.nanmean(ttci.reshape(-1)[pool_idx]))
+        sampled_regions.append({
+            "name": name, "lat": lat, "lon": lon,
+            "n_cells": n_sampled, "mean_ttci": round(mean_ttci, 4),
+        })
+        print(f"   ✓ {name}: {n_sampled} cells  (mean TTCI {mean_ttci:.3f})")
+
+    return {
+        "controls_cell":  np.concatenate(all_cells) if all_cells else np.array([]),
+        "controls_nbhd":  np.concatenate(all_nbhd) if all_nbhd else np.array([]),
+        "metric_controls": {
+            m: np.concatenate(v) if v else np.array([])
+            for m, v in metric_chunks.items()
+        },
+        "sampled_regions": sampled_regions,
+    }
+
+
+def run_global_validation(zoom: int = 11) -> Dict:
+    """Global-control CFIT validation: accident sites vs diverse global terrain.
+
+    Compares the same 15 CFIT accident sites against TTCI values sampled from
+    8 geographically diverse reference regions (flat plains, low hills, moderate
+    and high mountains, desert, coastal).  This complements the matched
+    local-control validation by answering a different question: *does TTCI
+    separate CFIT impact coordinates from average global terrain?*
+
+    For a worldwide EGPWS product the global comparison is arguably the more
+    honest headline number — the system must discriminate against the full
+    breadth of terrain it overflies, not just the local surroundings of a
+    mountain crash.
+
+    The accident-site values are recomputed from scratch (DEM tiles are cache-
+    hits after ``run_validation()`` has already warmed them) so the global
+    report is fully self-contained.
+    """
+    rng = np.random.default_rng(GLOBAL_RANDOM_SEED)
+    print(f"🌍 Global-control validation: {len(CFIT_ACCIDENTS)} accidents vs global terrain…")
+
+    # --- Accident sites (reuse _evaluate_accident; tiles are cached) ----------
+    accident_rng = np.random.default_rng(RANDOM_SEED)
+    metric_names = ["ttci", "slope", "tri", "curvature", "elevation_std"]
+    per_site: List[Dict] = []
+    metric_site_vals: Dict[str, List[float]] = {m: [] for m in metric_names}
+
+    for accident in CFIT_ACCIDENTS:
+        record = _evaluate_accident(accident, zoom, accident_rng)
+        if record is None:
+            continue
+        record.pop("_controls_cell")
+        record.pop("_controls_nbhd")
+        msite = record.pop("_metric_site")
+        record.pop("_metric_controls")
+        for m in metric_names:
+            metric_site_vals[m].append(msite[m])
+        per_site.append(record)
+
+    if not per_site:
+        raise RuntimeError("Global validation: no usable accident sites.")
+
+    print(f"   ✓ {len(per_site)} accident sites evaluated")
+
+    # --- Global reference controls -------------------------------------------
+    print("📡 Sampling global reference terrain…")
+    ctrl = _sample_global_controls(zoom, rng)
+    controls_cell = ctrl["controls_cell"]
+    controls_nbhd = ctrl["controls_nbhd"]
+    metric_controls = ctrl["metric_controls"]
+    sampled_regions = ctrl["sampled_regions"]
+
+    if controls_cell.size == 0:
+        raise RuntimeError("Global validation: no control cells could be sampled.")
+
+    site_ttci = np.array([r["site_ttci"] for r in per_site], dtype=np.float64)
+    site_max  = np.array([r["site_max_1km"] for r in per_site], dtype=np.float64)
+
+    n_sites       = len(per_site)
+    sites_high    = int(np.count_nonzero(site_ttci >= HIGH_RISK_THRESHOLD))
+    sites_max_high = int(np.count_nonzero(site_max >= HIGH_RISK_THRESHOLD))
+    controls_high = int(np.count_nonzero(controls_cell >= HIGH_RISK_THRESHOLD))
+
+    summary: Dict = {
+        "n_accidents":   n_sites,
+        "n_controls":    int(controls_cell.size),
+        "n_regions":     len(sampled_regions),
+        "zoom":          zoom,
+        "control_type":  "global_random",
+        "high_risk_threshold":  HIGH_RISK_THRESHOLD,
+        "site_radius_km":       SITE_RADIUS_KM,
+        # Exact cell stats.
+        "accident_mean_ttci":   round(float(np.mean(site_ttci)), 4),
+        "accident_median_ttci": round(float(np.median(site_ttci)), 4),
+        "control_mean_ttci":    round(float(np.mean(controls_cell)), 4),
+        "control_median_ttci":  round(float(np.median(controls_cell)), 4),
+        "accident_pct_high_or_critical": round(100.0 * sites_high / n_sites, 1),
+        "control_pct_high_or_critical":  round(
+            100.0 * controls_high / controls_cell.size, 1),
+        "accident_mean_site_percentile": round(
+            float(np.mean([r["site_percentile"] for r in per_site])), 1),
+        "auc_exact_cell":       round(_auc(site_ttci, controls_cell), 3),
+        "mannwhitney_p_exact":  _mannwhitney_p(site_ttci, controls_cell),
+        # 1 km neighbourhood stats.
+        "accident_mean_ttci_1km": round(float(np.mean(site_max)), 4),
+        "control_mean_ttci_1km":  round(float(np.mean(controls_nbhd)), 4),
+        "accident_pct_high_1km":  round(100.0 * sites_max_high / n_sites, 1),
+        "auc_neighbourhood_1km":  round(_auc(site_max, controls_nbhd), 3),
+        "mannwhitney_p_1km":      _mannwhitney_p(site_max, controls_nbhd),
+        "lift_mean":  round(
+            float(np.mean(site_ttci)) / max(float(np.mean(controls_cell)), 1e-9), 2),
+        "reference_regions": sampled_regions,
+    }
+
+    baseline_auc: Dict[str, float] = {}
+    for m in metric_names:
+        pos = np.array(metric_site_vals[m], dtype=np.float64)
+        neg = metric_controls[m]
+        pos = pos[~np.isnan(pos)]
+        neg = neg[~np.isnan(neg)]
+        baseline_auc[m] = round(_auc(pos, neg), 3)
+    summary["baseline_auc"] = baseline_auc
+
+    return {"summary": summary, "accidents": per_site}
+
+
 def save_report(report: Dict, path: str) -> str:
     """Write a validation report to JSON (stripping any internal arrays)."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)

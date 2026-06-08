@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { api, type Bounds, type Info, type PointQuery, type RiskLevel } from "@/lib/api";
+import { formatApiError, NOTIFY } from "@/lib/notifications";
 
 export type Status = "connecting" | "ready" | "computing" | "error" | "empty";
 export interface ActiveRegion extends Bounds { zoom: number; source: string }
@@ -12,7 +13,7 @@ export function demTypeToSource(demType?: string): string {
 
 export interface Toast { id: number; message: string; type: "info" | "success" | "error" }
 
-interface ActivateOptions { silent?: boolean }
+interface ActivateOptions { silent?: boolean; successMessage?: string }
 
 interface TtciState {
   status: Status;
@@ -45,14 +46,40 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
   const [lastQuery, setLastQuery] = useState<PointQuery | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
+  const toastTimers = useRef<number[]>([]);
   const activateSeq = useRef(0);
   const activeRegionRef = useRef<ActiveRegion | null>(null);
+  const recentToastKeys = useRef<Map<string, number>>(new Map());
   activeRegionRef.current = activeRegion;
 
+  const TOAST_TTL_MS = 5000;
+  const TOAST_DEDUPE_MS = 4000;
+  const MAX_VISIBLE_TOASTS = 3;
+
   const toast = useCallback((message: string, type: Toast["type"] = "info") => {
+    const key = `${type}:${message}`;
+    const now = Date.now();
+    const last = recentToastKeys.current.get(key);
+    if (last !== undefined && now - last < TOAST_DEDUPE_MS) return;
+    recentToastKeys.current.set(key, now);
+
     const id = ++toastId.current;
-    setToasts((t) => [...t, { id, message, type }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 5000);
+    setToasts((prev) => {
+      const next = [...prev, { id, message, type }];
+      return next.length > MAX_VISIBLE_TOASTS ? next.slice(-MAX_VISIBLE_TOASTS) : next;
+    });
+    const timer = window.setTimeout(() => {
+      setToasts((prev) => prev.filter((x) => x.id !== id));
+      if (recentToastKeys.current.get(key) === now) {
+        recentToastKeys.current.delete(key);
+      }
+    }, TOAST_TTL_MS);
+    toastTimers.current.push(timer);
+  }, []);
+
+  useEffect(() => () => {
+    toastTimers.current.forEach((t) => window.clearTimeout(t));
+    toastTimers.current = [];
   }, []);
   const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
 
@@ -118,14 +145,14 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
       setStatus("ready");
       setStatusText("Ready");
       if (!options?.silent) {
-        toast("TTCI computed for the selected area.", "success");
+        toast(options?.successMessage ?? NOTIFY.regionSuccess, "success");
       }
     } catch (err) {
       if (seq !== activateSeq.current) return;
       const prev = activeRegionRef.current;
       setStatus(prev ? "ready" : "empty");
       setStatusText(prev ? "Ready" : "No region");
-      toast((err as Error).message || "Could not assess that area — try a smaller box.", "error");
+      toast(formatApiError(err, NOTIFY.regionFailed), "error");
       throw err;
     }
   }, [applyInfo, toast]);
