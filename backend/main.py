@@ -4,6 +4,7 @@ Terrain Guard — FastAPI Backend
 Serves TTCI computation, tile overlays, and MSA calculations.
 """
 
+import asyncio
 import logging
 import math
 import os
@@ -96,11 +97,39 @@ def _demo_source() -> str:
 _state: Dict[str, Any] = {
     "results": None,
     "ready": False,
+    "zoom": None,
+    "source": None,
 }
+
+_VALID_REGION_SOURCES = frozenset({"tiles", "copernicus", "opentopo"})
 
 # Single, descriptive message used by every readiness guard so that all TTCI data
 # endpoints fail closed with an identical, recognizable 503 response.
 _NOT_READY_DETAIL = "TTCI surface is not yet ready; the service is still initializing."
+
+
+def _normalize_region_source(source: Optional[str]) -> str:
+    """Validate and normalize a DEM source id for on-demand region requests."""
+    s = (source or "tiles").strip().lower()
+    if s not in _VALID_REGION_SOURCES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid source {source!r}. Must be one of: tiles, copernicus, opentopo.",
+        )
+    return s
+
+
+def _ttci_stats(ttci: np.ndarray) -> Dict[str, float]:
+    """Summary stats over valid TTCI cells; safe when the array is all NaN."""
+    valid = ttci[~np.isnan(ttci)]
+    if valid.size == 0:
+        return {"min": 0.0, "max": 0.0, "mean": 0.0, "std": 0.0}
+    return {
+        "min": float(np.min(valid)),
+        "max": float(np.max(valid)),
+        "mean": float(np.mean(valid)),
+        "std": float(np.std(valid)),
+    }
 
 
 def _require_ready() -> None:
@@ -235,6 +264,9 @@ def _precompute_ttci() -> None:
 
         _state["results"] = results
         _state["ready"] = True
+        if not force_synthetic:
+            _state["zoom"] = zoom
+            _state["source"] = src
         logger.info(
             "TTCI preload complete: shape=%s, synthetic=%s — service is ready.",
             results["ttci"].shape, results["is_synthetic"],
@@ -499,13 +531,14 @@ async def info():
     r = _state["results"]
     bounds = r["bounds"]
     ttci = r["ttci"]
-    valid = ttci[~np.isnan(ttci)]
 
     return {
         "ready": True,
         "is_synthetic": bool(r["is_synthetic"]),
         "dem_type": r.get("dem_type", "unknown"),
         "source_label": r.get("source_label", "Unknown source"),
+        "zoom": _state.get("zoom"),
+        "source": _state.get("source"),
         "bounds": {
             "south": bounds.bottom,
             "north": bounds.top,
@@ -513,12 +546,7 @@ async def info():
             "east": bounds.right,
         },
         "shape": list(ttci.shape),
-        "stats": {
-            "min": float(np.min(valid)),
-            "max": float(np.max(valid)),
-            "mean": float(np.mean(valid)),
-            "std": float(np.std(valid)),
-        },
+        "stats": _ttci_stats(ttci),
         "risk_levels": [
             {"min": lo, "max": hi, "label": label, "color": color}
             for lo, hi, label, color in RISK_LEVELS
@@ -557,7 +585,6 @@ async def ttci_metadata():
     r = _state["results"]
     bounds = r["bounds"]
     ttci = r["ttci"]
-    valid = ttci[~np.isnan(ttci)]
 
     return {
         "bounds": {
@@ -567,12 +594,7 @@ async def ttci_metadata():
             "east": bounds.right,
         },
         "shape": list(ttci.shape),
-        "stats": {
-            "min": float(np.min(valid)),
-            "max": float(np.max(valid)),
-            "mean": float(np.mean(valid)),
-            "std": float(np.std(valid)),
-        },
+        "stats": _ttci_stats(ttci),
     }
 
 
@@ -632,8 +654,12 @@ def _get_region(south, north, west, east, zoom, source="tiles") -> Dict[str, Any
     if cached is not None:
         _REGION_CACHE.move_to_end(key)
         return cached
+    source = _normalize_region_source(source)
     try:
-        results = compute_region((south, north, west, east), zoom=zoom, source=source)
+        results = compute_region(
+            (south, north, west, east), zoom=zoom, source=source,
+            allow_synthetic_fallback=False,
+        )
     except ValueError as exc:
         # Oversized region / too many tiles for this zoom.
         raise HTTPException(status_code=400, detail=str(exc))
@@ -672,7 +698,8 @@ async def region_overlay(
     repeat views are instant.
     """
     south, north, west, east, zoom = _validate_region(south, north, west, east, zoom)
-    results = _get_region(south, north, west, east, zoom, source)
+    source = _normalize_region_source(source)
+    results = await asyncio.to_thread(_get_region, south, north, west, east, zoom, source)
     png_bytes = generate_overlay_bytes(results["ttci"])
     return Response(content=png_bytes, media_type="image/png",
                     headers={"Cache-Control": "public, max-age=3600"})
@@ -686,9 +713,9 @@ async def region_info(
 ):
     """Bounds, shape, stats, and source provenance for an on-demand region."""
     south, north, west, east, zoom = _validate_region(south, north, west, east, zoom)
-    r = _get_region(south, north, west, east, zoom, source)
+    source = _normalize_region_source(source)
+    r = await asyncio.to_thread(_get_region, south, north, west, east, zoom, source)
     ttci = r["ttci"]
-    valid = ttci[~np.isnan(ttci)]
     b = r["bounds"]
     return {
         "bounds": {"south": b.bottom, "north": b.top, "west": b.left, "east": b.right},
@@ -696,10 +723,7 @@ async def region_info(
         "is_synthetic": bool(r["is_synthetic"]),
         "dem_type": r.get("dem_type"),
         "source_label": r.get("source_label"),
-        "stats": {
-            "min": float(np.min(valid)), "max": float(np.max(valid)),
-            "mean": float(np.mean(valid)), "std": float(np.std(valid)),
-        },
+        "stats": _ttci_stats(ttci),
     }
 
 
@@ -721,7 +745,8 @@ async def region_grid(
     south, north, west, east, zoom = _validate_region(south, north, west, east, zoom)
     rows = max(2, min(rows, 400))
     cols = max(2, min(cols, 400))
-    r = _get_region(south, north, west, east, zoom, source)
+    source = _normalize_region_source(source)
+    r = await asyncio.to_thread(_get_region, south, north, west, east, zoom, source)
 
     ttci = _downsample(r["ttci"], rows, cols, fill=0.0)
     ttci = np.clip(ttci, 0.0, 1.0)
@@ -779,37 +804,50 @@ async def region_activate(req: "ActivateRegionRequest"):
     south, north, west, east, _ = _validate_region(req.south, req.north, req.west, req.east, req.zoom or 11)
     zoom = int(req.zoom) if req.zoom else _auto_zoom(south, north, west, east)
     zoom = max(_REGION_ZOOM_MIN, min(zoom, _REGION_ZOOM_MAX))
-    source = (req.source or "tiles").strip() or "tiles"
+    source = _normalize_region_source(req.source)
 
     try:
-        results = compute_region((south, north, west, east), zoom=zoom, source=source)
+        results = await asyncio.to_thread(
+            compute_region,
+            (south, north, west, east),
+            zoom,
+            source,
+            None,
+            None,
+            False,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         logger.exception("Region activation failed")
         raise HTTPException(status_code=502, detail=f"Region computation failed: {exc}")
 
+    if results.get("is_synthetic"):
+        raise HTTPException(
+            status_code=502,
+            detail="Could not acquire real terrain data for this area. Try a smaller region or a different DEM source.",
+        )
+
     # Publish as the active surface so every existing feature now operates on it.
     _state["results"] = results
     _state["ready"] = True
+    _state["zoom"] = zoom
+    _state["source"] = source
 
     ttci = results["ttci"]
-    valid = ttci[~np.isnan(ttci)]
     b = results["bounds"]
     logger.info("Activated region bbox=(%.3f,%.3f,%.3f,%.3f) zoom=%d source=%s shape=%s",
                 south, north, west, east, zoom, source, ttci.shape)
     return {
         "ready": True,
         "zoom": zoom,
+        "source": source,
         "is_synthetic": bool(results["is_synthetic"]),
         "dem_type": results.get("dem_type"),
         "source_label": results.get("source_label"),
         "bounds": {"south": b.bottom, "north": b.top, "west": b.left, "east": b.right},
         "shape": list(ttci.shape),
-        "stats": {
-            "min": float(np.min(valid)), "max": float(np.max(valid)),
-            "mean": float(np.mean(valid)), "std": float(np.std(valid)),
-        },
+        "stats": _ttci_stats(ttci),
     }
 
 

@@ -276,5 +276,10 @@ export function MsaPanel() {
 }
 
 function SectionHead({ children }: { children: React.ReactNode }) {
-  return <h3 className="mb-2 text-sm font-semibold text-foreground">{children}</h3>;
+  return (
+    <div className="mb-3 flex items-center gap-2.5">
+      <span className="text-section shrink-0">{children}</span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
 }

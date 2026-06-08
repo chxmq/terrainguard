@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
 import type { MsaSector, ProfilePoint, TawsLookahead, Validation } from "@/lib/api";
 
 export type ToolMode = "idle" | "draw-area" | "draw-route" | "place-aircraft";
@@ -54,11 +54,17 @@ interface ToolsState {
   cfitShown: boolean;
   setCfitShown: (b: boolean) => void;
 
-  // Layers
+  // Display & map
   overlayOpacity: number;
   setOverlayOpacity: (n: number) => void;
   showOverlay: boolean;
   setShowOverlay: (b: boolean) => void;
+  demSource: string;
+  setDemSource: (s: string) => void;
+  globeExaggeration: number;
+  setGlobeExaggeration: (n: number) => void;
+
+  resetForNewRegion: () => void;
 }
 
 const Ctx = createContext<ToolsState | null>(null);
@@ -67,7 +73,6 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const [mode, _setMode] = useState<ToolMode>("idle");
   const [view, setView] = useState<ViewMode>("2d");
 
-  // Interactive modes require the 2D map — auto-switch when activated.
   const setMode = (m: ToolMode) => {
     if (m === "draw-route" || m === "draw-area" || m === "place-aircraft") {
       setView("2d");
@@ -87,6 +92,19 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const [cfitShown, setCfitShown] = useState(false);
   const [overlayOpacity, setOverlayOpacity] = useState(0.72);
   const [showOverlay, setShowOverlay] = useState(true);
+  const [demSource, setDemSource] = useState("tiles");
+  const [globeExaggeration, setGlobeExaggeration] = useState(3);
+
+  const resetForNewRegion = useCallback(() => {
+    _setMode("idle");
+    setRouteWaypoints([]);
+    setMsaSectors([]);
+    setMsaProfile([]);
+    setFlyPosition(null);
+    setAircraft(null);
+    setTawsResult(null);
+    setCfitShown(false);
+  }, []);
 
   const value: ToolsState = {
     mode, setMode, view, setView,
@@ -95,6 +113,8 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     aircraft, setAircraft, tawsParams, setTawsParams, tawsResult, setTawsResult,
     validation, setValidation, cfitShown, setCfitShown,
     overlayOpacity, setOverlayOpacity, showOverlay, setShowOverlay,
+    demSource, setDemSource, globeExaggeration, setGlobeExaggeration,
+    resetForNewRegion,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

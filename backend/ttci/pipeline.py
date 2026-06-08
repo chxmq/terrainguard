@@ -471,7 +471,10 @@ def run_pipeline(dem_path=None, cell_size=30.0, weights=None, use_synthetic=Fals
     return results
 
 
-def compute_region(bbox, zoom=11, source="auto", weights=None, api_key=None):
+def compute_region(
+    bbox, zoom=11, source="auto", weights=None, api_key=None,
+    allow_synthetic_fallback: bool = False,
+):
     """Compute a TTCI surface for an arbitrary bbox in-memory (no disk writes).
 
     This is the on-demand, *global* counterpart to :func:`run_pipeline`: it
@@ -492,6 +495,8 @@ def compute_region(bbox, zoom=11, source="auto", weights=None, api_key=None):
         source: ``'auto'`` | ``'opentopo'`` | ``'copernicus'`` | ``'tiles'``.
         weights: optional TTCI weight override (validated in :func:`compute_ttci`).
         api_key: OpenTopography key; falls back to ``OPENTOPO_API_KEY``.
+        allow_synthetic_fallback: when False (default for on-demand regions),
+            DEM acquisition failures propagate instead of substituting demo terrain.
 
     Returns:
         A results dict (see above). Never writes to disk.
@@ -501,7 +506,10 @@ def compute_region(bbox, zoom=11, source="auto", weights=None, api_key=None):
     if api_key is None:
         api_key = os.environ.get("OPENTOPO_API_KEY")
 
-    dem = acquire_dem(bbox, api_key=api_key, zoom=zoom, source=source)
+    dem = acquire_dem(
+        bbox, api_key=api_key, zoom=zoom, source=source,
+        allow_synthetic_fallback=allow_synthetic_fallback,
+    )
     cell_size = dem.cell_size_m if dem.cell_size_m is not None else 30.0
     results = compute_ttci(dem.elevation, cell_size, weights)
 

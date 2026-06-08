@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   MapContainer, TileLayer, ImageOverlay, CircleMarker, Marker, Polyline, Popup, Tooltip,
+  ZoomControl,
   useMap, useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
@@ -64,12 +65,16 @@ const MODE_HINTS: Record<string, string> = {
 function FitToRegion() {
   const { activeRegion } = useTtci();
   const map = useMap();
+  const lastFitKey = useRef<string | null>(null);
   useEffect(() => {
-    if (activeRegion)
-      map.fitBounds(
-        [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
-        { padding: [24, 24] },
-      );
+    if (!activeRegion) return;
+    const key = `${activeRegion.south},${activeRegion.north},${activeRegion.west},${activeRegion.east}`;
+    if (lastFitKey.current === key) return;
+    lastFitKey.current = key;
+    map.fitBounds(
+      [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
+      { padding: [24, 24] },
+    );
   }, [activeRegion, map]);
   return null;
 }
@@ -231,7 +236,7 @@ function MapModeBanner() {
   const hint = MODE_HINTS[mode];
   if (!hint) return null;
   return (
-    <div className="pointer-events-none absolute left-1/2 top-16 z-[700] -translate-x-1/2 panel-float px-4 py-2.5 text-sm font-medium text-foreground">
+    <div className="pointer-events-none absolute left-1/2 top-16 z-[700] -translate-x-1/2 panel-float px-4 py-2.5 text-body-sm font-medium text-foreground">
       {hint}
     </div>
   );
@@ -364,11 +369,11 @@ function RiskLegend() {
     : FALLBACK_LEVELS;
   return (
     <div className="absolute bottom-7 left-3 z-[700] flex items-center gap-2 panel-float px-3 py-1.5">
-      <span className="mr-1 text-[11px] font-medium text-muted-foreground">Risk</span>
+      <span className="text-label mr-1 mb-0">Risk</span>
       {levels.map((l) => (
         <div key={l.label} className="flex items-center gap-1">
           <span className="h-2.5 w-2.5 rounded-sm" style={{ background: l.color }} />
-          <span className="text-[10px] text-muted-foreground">{l.label}</span>
+          <span className="text-[11px] text-body">{l.label}</span>
         </div>
       ))}
     </div>
@@ -393,33 +398,29 @@ function CockpitStrip() {
         {/* Left — key numbers */}
         <div className="flex w-52 flex-shrink-0 flex-col justify-around border-r border-border px-4 py-3">
           <div>
-            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Terrain Elevation
-            </div>
-            <div className="font-mono text-xl font-bold leading-tight text-foreground">
+            <div className="text-label">Terrain Elevation</div>
+            <div className="text-metric text-xl">
               {Math.round(elevation_m).toLocaleString()} m
             </div>
-            <div className="font-mono text-[11px] text-muted-foreground">
+            <div className="text-metric text-[11px] text-muted-foreground">
               {Math.round(elevation_ft).toLocaleString()} ft
             </div>
           </div>
           <div>
-            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Min Safe Altitude
-            </div>
-            <div className="font-mono text-xl font-bold leading-tight text-primary">
+            <div className="text-label">Min Safe Altitude</div>
+            <div className="text-metric-accent text-xl">
               {Math.round(msa_ft).toLocaleString()} ft
             </div>
           </div>
           <div className="flex items-end gap-4">
             <div>
-              <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Sector</div>
-              <div className="font-mono text-sm font-bold text-primary">{sectorLabel}</div>
+              <div className="text-label">Sector</div>
+              <div className="text-metric-accent">{sectorLabel}</div>
             </div>
             {ttci != null && (
               <div>
-                <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">TTCI</div>
-                <div className="font-mono text-sm font-bold" style={{ color: ttciColor }}>
+                <div className="text-label">TTCI</div>
+                <div className="text-metric font-semibold" style={{ color: ttciColor }}>
                   {ttci.toFixed(3)}
                 </div>
               </div>
@@ -447,13 +448,11 @@ function CockpitStrip() {
               clearStatus === "CLEAR"   && "border-risk-vlow/40 bg-risk-vlow/6",
             )}
           >
-            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
-              Clearance
-            </div>
-            <div className="font-mono text-4xl font-black leading-tight" style={{ color: clearColor }}>
+            <div className="text-label">Clearance</div>
+            <div className="text-metric-lg text-4xl font-bold" style={{ color: clearColor }}>
               {Math.round(clearance_ft).toLocaleString()}
             </div>
-            <div className="font-mono text-[10px] text-muted-foreground">ft</div>
+            <div className="text-metric text-[10px] text-muted-foreground">ft</div>
             <div className="mt-0.5 text-[11px] font-black tracking-wider" style={{ color: clearColor }}>
               {clearStatus}
             </div>
@@ -495,8 +494,7 @@ function WarningOverlay() {
 
 export function MapView() {
   const { status, activeRegion, overlayVersion, activate, toast } = useTtci();
-  const { mode, setMode, view, setView, overlayOpacity, showOverlay } = useTools();
-  const [source, setSource] = useState("tiles");
+  const { mode, setMode, view, setView, overlayOpacity, showOverlay, demSource, setDemSource } = useTools();
   const onAreaRef = useRef<(b: Bounds) => void>(() => {});
 
   onAreaRef.current = async (b: Bounds) => {
@@ -505,7 +503,7 @@ export function MapView() {
       toast(spanErrorMessage(b), "error");
       return;
     }
-    try { await activate(b, source); } catch { /* handled */ }
+    try { await activate(b, demSource); } catch { /* handled */ }
   };
 
   const showPrompt =
@@ -513,7 +511,8 @@ export function MapView() {
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer center={[25, 82]} zoom={3} className="h-full w-full" zoomControl attributionControl>
+      <MapContainer center={[25, 82]} zoom={3} className="h-full w-full" zoomControl={false} attributionControl>
+        <ZoomControl position="topright" />
         <TileLayer
           url={TILE_URL}
           subdomains="abcd"
@@ -560,18 +559,18 @@ export function MapView() {
           setMode("draw-area");
           toast("Drag a box on the map to select the area to assess.", "info");
         }}
-        className="absolute left-3 top-3 z-[700] flex items-center gap-2 panel-float px-3.5 py-2 text-xs font-semibold transition-colors hover:text-primary"
+        className="absolute left-3 top-3 z-[700] flex items-center gap-2 panel-float px-3.5 py-2 text-xs font-semibold transition-colors hover:text-foreground"
       >
         <Pencil className="h-3.5 w-3.5" /> Select area
       </button>
 
       {showPrompt && (
         <div className="absolute inset-0 z-[680] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="w-[min(460px,calc(100%-48px))] panel p-8 text-center shadow-lg">
-            <h2 className="mb-3 text-xl font-semibold text-foreground">
+          <div className="w-[min(460px,calc(100%-48px))] panel p-8 text-center">
+            <h2 className="text-title mb-3 text-lg">
               Where do you want to analyze?
             </h2>
-            <p className="mb-6 text-sm leading-relaxed text-muted-foreground">
+            <p className="text-hint mb-6">
               Draw a region on the map or jump to a preset mountain area.
             </p>
             <div className="mb-4 flex items-center justify-center gap-2">
@@ -581,8 +580,8 @@ export function MapView() {
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 DEM
                 <select
-                  value={source}
-                  onChange={(e) => setSource(e.target.value)}
+                  value={demSource}
+                  onChange={(e) => setDemSource(e.target.value)}
                   className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                 >
                   <option value="tiles">SRTM 30 m</option>
@@ -595,8 +594,8 @@ export function MapView() {
               {PRESETS.map((p) => (
                 <button
                   key={p.name}
-                  onClick={() => activate(p.bbox, source).catch(() => {})}
-                  className="rounded-full border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+                  onClick={() => activate(p.bbox, demSource).catch(() => {})}
+                  className="rounded-full border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
                 >
                   {p.name}
                 </button>
@@ -609,8 +608,8 @@ export function MapView() {
       {status === "computing" && (
         <div className="absolute inset-0 z-[690] flex items-center justify-center bg-background/80 backdrop-blur-sm">
           <div className="panel flex flex-col items-center gap-3 px-8 py-6">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-muted border-t-primary" />
-            <span className="text-sm text-muted-foreground">Computing TTCI for the selected area…</span>
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-muted border-t-foreground" />
+            <span className="text-body-sm">Computing TTCI for the selected area…</span>
           </div>
         </div>
       )}

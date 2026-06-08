@@ -22,9 +22,12 @@ export function TawsPanel() {
     tawsParams, setTawsParams,
     tawsResult, setTawsResult,
   } = useTools();
-  const simRef = useRef<number | null>(null);
+  const simRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const simBusyRef = useRef(false);
   const aircraftRef = useRef(aircraft);
+  const tawsParamsRef = useRef(tawsParams);
   aircraftRef.current = aircraft;
+  tawsParamsRef.current = tawsParams;
 
   const run = async (ac = aircraftRef.current, params = tawsParams) => {
     if (!ac) return;
@@ -45,24 +48,55 @@ export function TawsPanel() {
   }, [aircraft, tawsParams]);
 
   const stopSim = () => {
-    if (simRef.current !== null) { clearInterval(simRef.current); simRef.current = null; }
+    if (simRef.current !== null) {
+      clearTimeout(simRef.current);
+      simRef.current = null;
+    }
+    simBusyRef.current = false;
   };
   useEffect(() => () => stopSim(), []);
+
+  const SIM_INTERVAL_MS = 650;
+  const SIM_STEPS = 60;
 
   const toggleSim = () => {
     if (simRef.current !== null) { stopSim(); return; }
     const start = aircraftRef.current;
     if (!start) return;
+
     let steps = 0;
     let pos = { ...start };
-    simRef.current = window.setInterval(async () => {
-      steps++;
-      const [lat, lon] = destinationPoint(pos.lat, pos.lon, tawsParams.heading_deg, 0.4 * 1.852);
-      pos = { lat, lon };
-      setAircraft(pos);
-      await run(pos, tawsParams);
-      if (steps >= 60) stopSim();
-    }, 650);
+
+    const tick = async () => {
+      if (simRef.current === null) return;
+      if (simBusyRef.current) {
+        simRef.current = setTimeout(tick, SIM_INTERVAL_MS);
+        return;
+      }
+
+      simBusyRef.current = true;
+      try {
+        steps++;
+        const params = tawsParamsRef.current;
+        const dtHours = SIM_INTERVAL_MS / 3_600_000;
+        const nm = params.ground_speed_kt * dtHours;
+        const [lat, lon] = destinationPoint(pos.lat, pos.lon, params.heading_deg, nm * 1.852);
+        pos = { lat, lon };
+        setAircraft(pos);
+        await run(pos, params);
+        if (steps >= SIM_STEPS) {
+          stopSim();
+          return;
+        }
+      } finally {
+        simBusyRef.current = false;
+      }
+      if (simRef.current !== null) {
+        simRef.current = setTimeout(tick, SIM_INTERVAL_MS);
+      }
+    };
+
+    simRef.current = setTimeout(tick, SIM_INTERVAL_MS);
   };
 
   const update = (patch: Partial<TawsParams>) => setTawsParams({ ...tawsParams, ...patch });
@@ -164,9 +198,7 @@ export function TawsPanel() {
 function SectionHead({ children }: { children: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2.5">
-      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-        {children}
-      </span>
+      <span className="text-section shrink-0">{children}</span>
       <div className="h-px flex-1 bg-border" />
     </div>
   );

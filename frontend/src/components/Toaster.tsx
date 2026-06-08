@@ -19,7 +19,7 @@ export function Toaster() {
             className={cn(
               "h-2 w-2 shrink-0 rounded-full",
               t.type === "error" ? "bg-risk-high"
-              : t.type === "success" ? "bg-emerald-500" : "bg-primary",
+              : t.type === "success" ? "bg-emerald-500" : "bg-foreground",
             )}
           />
           <span className="flex-1 leading-snug">{t.message}</span>

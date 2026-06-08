@@ -3,6 +3,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { MapView } from "@/components/MapView";
 import { Globe3DView } from "@/components/Globe3DView";
 import { Toaster } from "@/components/Toaster";
+import { RegionSync } from "@/components/RegionSync";
 import { TtciProvider } from "@/state/ttci";
 import { ToolsProvider } from "@/state/tools";
 
@@ -10,6 +11,7 @@ export default function App() {
   return (
     <TtciProvider>
       <ToolsProvider>
+        <RegionSync />
         <div className="flex h-full flex-col">
           <Header />
           <main className="flex flex-1 overflow-hidden">

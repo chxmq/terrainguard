@@ -35,7 +35,9 @@ export default {
           DEFAULT: "hsl(var(--card))",
           foreground: "hsl(var(--card-foreground))",
         },
-        // Fixed TTCI risk palette (consistent across light/dark).
+        body: "hsl(var(--body))",
+        highlight: "hsl(var(--highlight))",
+        subtle: "hsl(var(--subtle))",
         risk: {
           vlow: "#2ecc71",
           low: "#f1c40f",
@@ -50,8 +52,8 @@ export default {
         sm: "calc(var(--radius) - 4px)",
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+        sans: ['"IBM Plex Sans"', "Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ['"IBM Plex Mono"', "ui-monospace", "monospace"],
       },
       keyframes: {
         "accordion-down": { from: { height: "0" }, to: { height: "var(--radix-accordion-content-height)" } },

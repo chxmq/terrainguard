@@ -9,6 +9,8 @@ export interface Info {
   is_synthetic?: boolean;
   dem_type?: string;
   source_label?: string;
+  source?: string;
+  zoom?: number;
   bounds?: Bounds;
   shape?: [number, number];
   stats?: Stats;
@@ -18,6 +20,7 @@ export interface Info {
 export interface ActivateResponse {
   ready: boolean;
   zoom: number;
+  source?: string;
   is_synthetic: boolean;
   dem_type: string;
   source_label: string;

@@ -1,14 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { useTtci } from "@/state/ttci";
 import { useTools } from "@/state/tools";
-import { Button } from "@/components/ui/button";
 import { fmt, fmtInt } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
 export function CfitPanel() {
-  const { toast } = useTtci();
-  const { validation, setValidation, cfitShown, setCfitShown, setView } = useTools();
+  const { validation, setValidation } = useTools();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -79,16 +76,6 @@ export function CfitPanel() {
         </p>
       </section>
 
-      {/* ── Map Toggle ── */}
-      <Button
-        size="sm"
-        className="w-full"
-        variant={cfitShown ? "secondary" : "default"}
-        onClick={() => { setCfitShown(!cfitShown); if (!cfitShown) setView("2d"); }}
-      >
-        {cfitShown ? "Hide accident sites" : "Show accident sites on map"}
-      </Button>
-
       {/* ── Accident Log ── */}
       <section>
         <SectionHead>Accident Log</SectionHead>
@@ -133,9 +120,7 @@ export function CfitPanel() {
 function SectionHead({ children }: { children: React.ReactNode }) {
   return (
     <div className="mb-3 flex items-center gap-2.5">
-      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.2em] text-muted-foreground">
-        {children}
-      </span>
+      <span className="text-section shrink-0">{children}</span>
       <div className="h-px flex-1 bg-border" />
     </div>
   );

@@ -4,12 +4,15 @@ import { api, type Bounds, type Info, type PointQuery, type RiskLevel } from "@/
 export type Status = "connecting" | "ready" | "computing" | "error" | "empty";
 export interface ActiveRegion extends Bounds { zoom: number; source: string }
 
-function demTypeToSource(demType?: string): string {
+export function demTypeToSource(demType?: string): string {
   if (demType === "copernicus30") return "copernicus";
   if (demType === "opentopo") return "opentopo";
   return "tiles";
 }
+
 export interface Toast { id: number; message: string; type: "info" | "success" | "error" }
+
+interface ActivateOptions { silent?: boolean }
 
 interface TtciState {
   status: Status;
@@ -19,10 +22,10 @@ interface TtciState {
   sourceLabel: string;
   isSynthetic: boolean;
   activeRegion: ActiveRegion | null;
-  overlayVersion: number;          // bumps to force overlay reload
+  overlayVersion: number;
   lastQuery: PointQuery | null;
   toasts: Toast[];
-  activate: (bbox: Bounds, source: string) => Promise<void>;
+  activate: (bbox: Bounds, source: string, options?: ActivateOptions) => Promise<void>;
   setLastQuery: (q: PointQuery | null) => void;
   toast: (message: string, type?: Toast["type"]) => void;
   dismissToast: (id: number) => void;
@@ -42,6 +45,9 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
   const [lastQuery, setLastQuery] = useState<PointQuery | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
+  const activateSeq = useRef(0);
+  const activeRegionRef = useRef<ActiveRegion | null>(null);
+  activeRegionRef.current = activeRegion;
 
   const toast = useCallback((message: string, type: Toast["type"] = "info") => {
     const id = ++toastId.current;
@@ -57,7 +63,6 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
     setIsSynthetic(Boolean(i.is_synthetic));
   }, []);
 
-  // On mount: detect server, load any preloaded region, else go "empty".
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -76,7 +81,12 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         if (i.ready && i.bounds) {
           applyInfo(i);
-          setActiveRegion({ ...i.bounds, zoom: 11, source: demTypeToSource(i.dem_type) });
+          const source = i.source ?? demTypeToSource(i.dem_type);
+          setActiveRegion({
+            ...i.bounds,
+            zoom: i.zoom ?? 11,
+            source,
+          });
           setStatus("ready");
           setStatusText("Ready");
         } else {
@@ -91,25 +101,34 @@ export function TtciProvider({ children }: { children: React.ReactNode }) {
     return () => { cancelled = true; };
   }, [applyInfo]);
 
-  const activate = useCallback(async (bbox: Bounds, source: string) => {
+  const activate = useCallback(async (bbox: Bounds, source: string, options?: ActivateOptions) => {
+    const seq = ++activateSeq.current;
     setStatus("computing");
     setStatusText("Computing…");
     try {
       const resp = await api.activateRegion({ ...bbox, source });
-      setActiveRegion({ ...resp.bounds, zoom: resp.zoom, source });
+      if (seq !== activateSeq.current) return;
+
+      setActiveRegion({ ...resp.bounds, zoom: resp.zoom, source: resp.source ?? source });
       const i = await api.info();
+      if (seq !== activateSeq.current) return;
+
       applyInfo(i);
       setOverlayVersion((v) => v + 1);
       setStatus("ready");
       setStatusText("Ready");
-      toast("TTCI computed for the selected area.", "success");
+      if (!options?.silent) {
+        toast("TTCI computed for the selected area.", "success");
+      }
     } catch (err) {
-      setStatus(activeRegion ? "ready" : "empty");
-      setStatusText(activeRegion ? "Ready" : "No region");
+      if (seq !== activateSeq.current) return;
+      const prev = activeRegionRef.current;
+      setStatus(prev ? "ready" : "empty");
+      setStatusText(prev ? "Ready" : "No region");
       toast((err as Error).message || "Could not assess that area — try a smaller box.", "error");
       throw err;
     }
-  }, [applyInfo, toast, activeRegion]);
+  }, [applyInfo, toast]);
 
   const value: TtciState = {
     status, statusText, info, riskLevels, sourceLabel, isSynthetic,

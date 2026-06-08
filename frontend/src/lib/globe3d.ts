@@ -68,6 +68,8 @@ export class Globe3DController {
   private flyEntity: any = null;
   private tawsEntities: any[] = [];
   private exaggeration = 3.0;
+  private overlayOpacity = 0.72;
+  private showOverlay = true;
   private tracking = false;
   onHint?: (text: string | null) => void;
 
@@ -170,7 +172,17 @@ export class Globe3DController {
     const rect = C.Rectangle.fromDegrees(b.west, b.south, b.east, b.north);
     const provider = await C.SingleTileImageryProvider.fromUrl(url, { rectangle: rect });
     this.ttciLayer = this.viewer.imageryLayers.addImageryProvider(provider);
-    this.ttciLayer.alpha = 0.72;
+    this.ttciLayer.alpha = this.overlayOpacity;
+    this.ttciLayer.show = this.showOverlay;
+  }
+
+  setOverlaySettings(show: boolean, opacity: number) {
+    this.showOverlay = show;
+    this.overlayOpacity = opacity;
+    if (this.ttciLayer) {
+      this.ttciLayer.show = show;
+      this.ttciLayer.alpha = opacity;
+    }
   }
 
   private flyTo() {
@@ -352,14 +364,17 @@ export class Globe3DController {
     return this.tracking;
   }
 
-  async toggleCFIT(): Promise<"shown" | "hidden" | "empty"> {
+  async setCFITVisible(show: boolean): Promise<"shown" | "hidden" | "empty"> {
     if (!this.viewer || !window.Cesium) return "empty";
     const C = window.Cesium;
-    if (this.cfit.length) {
-      this.cfit.forEach((e) => this.viewer.entities.remove(e));
-      this.cfit = [];
+    if (!show) {
+      if (this.cfit.length) {
+        this.cfit.forEach((e) => this.viewer.entities.remove(e));
+        this.cfit = [];
+      }
       return "hidden";
     }
+    if (this.cfit.length) return "shown";
     const res = await fetch("/api/validation");
     if (!res.ok) return "empty";
     const data = await res.json();
