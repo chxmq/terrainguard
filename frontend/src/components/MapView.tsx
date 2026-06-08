@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
-  MapContainer, TileLayer, ImageOverlay, CircleMarker, Marker, Polyline, Popup, Tooltip,
-  ZoomControl,
+  MapContainer, TileLayer, ImageOverlay, CircleMarker, Marker, Polyline, Rectangle, Popup, Tooltip,
   useMap, useMapEvents,
 } from "react-leaflet";
 import L from "leaflet";
@@ -14,69 +13,158 @@ import { useTtci, riskColor } from "@/state/ttci";
 import { useTools } from "@/state/tools";
 import { Button } from "@/components/ui/button";
 import { MsaProfileChart } from "@/components/charts";
-import { cn, fmt, fmtInt, msaClearanceColor, msaClearanceStatus, MSA_CLEARANCE_WARNING_FT } from "@/lib/utils";
-
-const MAX_REGION_SPAN_DEG = 12;
-const MIN_DRAW_ZOOM = 7;
-
-function spanTooLarge(b: Bounds): boolean {
-  return (b.north - b.south) > MAX_REGION_SPAN_DEG || (b.east - b.west) > MAX_REGION_SPAN_DEG;
-}
-
-function spanErrorMessage(b: Bounds): string {
-  const latSpan = (b.north - b.south).toFixed(1);
-  const lonSpan = (b.east - b.west).toFixed(1);
-  return (
-    `Selected area is ${latSpan}° × ${lonSpan}° (max ${MAX_REGION_SPAN_DEG}° per side). ` +
-    "Zoom in on the map and draw a smaller box."
-  );
-}
-
-/** Bump map zoom when the user starts drawing so boxes aren't continent-sized. */
-function PrepareDrawArea() {
-  const map = useMap();
-  const { mode } = useTools();
-  const { toast } = useTtci();
-  useEffect(() => {
-    if (mode !== "draw-area") return;
-    if (map.getZoom() < MIN_DRAW_ZOOM) {
-      map.setZoom(MIN_DRAW_ZOOM);
-      toast("Zoomed in for area selection — drag a box around the terrain you want.", "info");
-    }
-  }, [mode, map, toast]);
-  return null;
-}
+import { cn, fmt, fmtInt } from "@/lib/utils";
 
 const PRESETS: Array<{ name: string; bbox: Bounds }> = [
-  { name: "Ladakh", bbox: { south: 33.8, north: 34.5, west: 76.8, east: 77.8 } },
-  { name: "Mont Blanc", bbox: { south: 45.7, north: 46.1, west: 6.7, east: 7.3 } },
-  { name: "Everest", bbox: { south: 27.8, north: 28.1, west: 86.7, east: 87.0 } },
+  { name: "Ladakh",      bbox: { south: 33.8, north: 34.5, west: 76.8, east: 77.8 } },
+  { name: "Mont Blanc",  bbox: { south: 45.7, north: 46.1, west: 6.7,  east: 7.3  } },
+  { name: "Everest",     bbox: { south: 27.8, north: 28.1, west: 86.7, east: 87.0 } },
   { name: "Andes (Cusco)", bbox: { south: -13.3, north: -13.0, west: -72.7, east: -72.4 } },
-  { name: "Mt Rainier", bbox: { south: 46.7, north: 47.0, west: -121.9, east: -121.6 } },
+  { name: "Mt Rainier",  bbox: { south: 46.7, north: 47.0, west: -121.9, east: -121.6 } },
 ];
-const TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const TILE_URL_LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png";
+const TILE_URL_DARK  = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+const BUF_DEG = 0.0834;
 
-const MODE_HINTS: Record<string, string> = {
-  "draw-area": "Drag a box around the terrain you want to analyze",
-  "draw-route": "Click on the map to place waypoints · double-click to finish",
-  "place-aircraft": "Click the map to place the aircraft",
-};
+// ── Computing progress steps shown during TTCI calculation ──
+const COMPUTE_STEPS = [
+  "Downloading DEM tiles…",
+  "Resampling elevation grid…",
+  "Computing slope (Horn's method)…",
+  "Computing TRI (Riley 1999)…",
+  "Computing curvature…",
+  "Computing elevation σ…",
+  "Fusing TTCI weights…",
+  "Rendering risk overlay…",
+];
+
+function useComputeProgress(active: boolean) {
+  const [step, setStep] = useState(0);
+  const [done, setDone] = useState<boolean[]>([]);
+  const ref = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!active) { setStep(0); setDone([]); return; }
+    setStep(0); setDone([]);
+    let idx = 0;
+    const tick = () => {
+      idx++;
+      setDone((d) => [...d, true]);
+      setStep(idx);
+      if (idx < COMPUTE_STEPS.length - 1) {
+        ref.current = setTimeout(tick, 900 + Math.random() * 600);
+      }
+    };
+    ref.current = setTimeout(tick, 700);
+    return () => { if (ref.current) clearTimeout(ref.current); };
+  }, [active]);
+
+  return { step, done };
+}
+
+// ── AAC audio playback hook ──
+// Plays terrain-pullup.aac (place it in frontend/public/).
+// CAUTION mode plays a separate obstacle-caution.aac if present, else a 440 Hz beep.
+function useTerrainAudio() {
+  const pullupRef   = useRef<HTMLAudioElement | null>(null);
+  const cautionRef  = useRef<HTMLAudioElement | null>(null);
+  const beepCtxRef  = useRef<AudioContext | null>(null);
+  const lastLevelRef = useRef<"CLEAR" | "CAUTION" | "WARNING">("CLEAR");
+
+  useEffect(() => {
+    // Preload the AAC files from /public
+    const pu = new Audio("/terrain-pullup.aac");
+    pu.preload = "auto";
+    pullupRef.current = pu;
+
+    const cau = new Audio("/obstacle-caution.aac");
+    cau.preload = "auto";
+    cautionRef.current = cau;
+
+    return () => {
+      pu.pause();
+      cau.pause();
+    };
+  }, []);
+
+  const playWarning = useCallback(() => {
+    const audio = pullupRef.current;
+    if (!audio) return;
+    audio.currentTime = 0;
+    audio.play().catch(() => {/* autoplay blocked — user hasn't interacted yet */});
+  }, []);
+
+  const playBeep = useCallback(() => {
+    // Try the caution AAC first; fall back to a synthesised beep
+    const audio = cautionRef.current;
+    if (audio && audio.readyState >= 2) {
+      audio.currentTime = 0;
+      audio.play().catch(() => synthBeep());
+    } else {
+      synthBeep();
+    }
+  }, []);
+
+  function synthBeep() {
+    try {
+      if (!beepCtxRef.current) beepCtxRef.current = new AudioContext();
+      const ctx = beepCtxRef.current;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      osc.type = "sine";
+      gain.gain.setValueAtTime(0.35, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+      osc.start(); osc.stop(ctx.currentTime + 0.4);
+    } catch { /* audio unavailable */ }
+  }
+
+  const trigger = useCallback(
+    (level: "CLEAR" | "CAUTION" | "WARNING") => {
+      const prev = lastLevelRef.current;
+      lastLevelRef.current = level;
+      if (level === "WARNING" && prev !== "WARNING") playWarning();
+      if (level === "CAUTION" && prev === "CLEAR")   playBeep();
+    },
+    [playWarning, playBeep],
+  );
+
+  return { trigger };
+}
 
 function FitToRegion() {
   const { activeRegion } = useTtci();
   const map = useMap();
-  const lastFitKey = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeRegion) return;
-    const key = `${activeRegion.south},${activeRegion.north},${activeRegion.west},${activeRegion.east}`;
-    if (lastFitKey.current === key) return;
-    lastFitKey.current = key;
-    map.fitBounds(
-      [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
-      { padding: [24, 24] },
-    );
+    if (activeRegion)
+      map.fitBounds(
+        [[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]],
+        { padding: [24, 24] },
+      );
   }, [activeRegion, map]);
   return null;
+}
+
+function TileLayerThemed() {
+  const [dark, setDark] = useState(() =>
+    document.documentElement.classList.contains("dark"),
+  );
+  useEffect(() => {
+    const observer = new MutationObserver(() =>
+      setDark(document.documentElement.classList.contains("dark")),
+    );
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <TileLayer
+      url={dark ? TILE_URL_DARK : TILE_URL_LIGHT}
+      subdomains="abcd"
+      attribution="&copy; OpenStreetMap &copy; CARTO"
+      maxZoom={18}
+    />
+  );
 }
 
 function ClickLayer() {
@@ -120,7 +208,6 @@ function ClickLayer() {
 
 function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
   const map = useMap();
-  const { toast } = useTtci();
   const { mode, setMode, setRouteWaypoints } = useTools();
   useEffect(() => {
     if (mode !== "draw-area" && mode !== "draw-route") return;
@@ -128,14 +215,9 @@ function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
     const handler =
       mode === "draw-area"
         ? new LD.Rectangle(map, {
-            // leaflet-draw 1.0.4's area tooltip (readableArea) throws
-            // "type is not defined" on newer Leaflet — disable it.
-            showArea: false,
-            metric: true,
             shapeOptions: { color: "#06b6d4", weight: 2, fillColor: "#06b6d4", fillOpacity: 0.05 },
           })
         : new LD.Polyline(map, {
-            showLength: false,
             shapeOptions: { color: "#3b82f6", weight: 3, dashArray: "8,6" },
             maxPoints: 50,
           });
@@ -143,20 +225,9 @@ function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
     const onCreated = (e: any) => {
       if (mode === "draw-area") {
         const b = e.layer.getBounds();
-        const south = b.getSouth(), north = b.getNorth(), west = b.getWest(), east = b.getEast();
-        const bbox = { south, north, west, east };
-        if (spanTooLarge(bbox)) {
-          map.removeLayer(e.layer);
-          setMode("idle");
-          toast(spanErrorMessage(bbox), "error");
-          return;
-        }
-        map.removeLayer(e.layer);
-        onArea(bbox);
+        onArea({ south: b.getSouth(), north: b.getNorth(), west: b.getWest(), east: b.getEast() });
       } else {
-        const wps = e.layer.getLatLngs().map((ll: any) => [ll.lat, ll.lng] as [number, number]);
-        map.removeLayer(e.layer);
-        setRouteWaypoints(wps);
+        setRouteWaypoints(e.layer.getLatLngs().map((ll: any) => [ll.lat, ll.lng]));
         setMode("idle");
       }
     };
@@ -165,80 +236,54 @@ function DrawController({ onArea }: { onArea: (b: Bounds) => void }) {
       map.off((L as any).Draw.Event.CREATED, onCreated);
       try { handler.disable(); } catch { /* noop */ }
     };
-  }, [mode, map, onArea, setMode, setRouteWaypoints, toast]);
+  }, [mode, map, onArea, setMode, setRouteWaypoints]);
   return null;
 }
 
 function MsaLayers() {
   const { riskLevels } = useTtci();
   const { routeWaypoints, msaSectors } = useTools();
-
-  if (msaSectors.length > 0) {
-    return (
-      <>
-        {msaSectors.map((s) => {
-          const color = s.ttci ? riskColor(riskLevels, s.ttci.mean) : "#2563eb";
-          return (
-            <Polyline
-              key={`sec${s.sector}`}
-              positions={[[s.from.lat, s.from.lon], [s.to.lat, s.to.lon]]}
-              pathOptions={{ color, weight: 5, opacity: 0.92, lineCap: "round", lineJoin: "round" }}
-            >
-              <Popup>
-                <div className="font-sans text-xs">
-                  <div className="font-semibold">Leg {s.sector}</div>
-                  <div>Min safe altitude: <strong>{fmtInt(s.msa_ft)} ft</strong></div>
-                  <div>Highest terrain: {fmtInt(s.max_terrain_ft)} ft</div>
-                </div>
-              </Popup>
-            </Polyline>
-          );
-        })}
-        {routeWaypoints.map(([la, lo], i) => (
-          <CircleMarker
-            key={`wp${i}`}
-            center={[la, lo]}
-            radius={6}
-            pathOptions={{ color: "#1e40af", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
-          >
-            <Tooltip direction="top">{i + 1}</Tooltip>
-          </CircleMarker>
-        ))}
-      </>
-    );
-  }
-
-  if (routeWaypoints.length < 2) return null;
-
   return (
     <>
-      <Polyline
-        positions={routeWaypoints.map(([la, lo]) => [la, lo])}
-        pathOptions={{ color: "#2563eb", weight: 4, dashArray: "10,8", opacity: 0.9 }}
-      />
+      {routeWaypoints.length > 1 && (
+        <Polyline
+          positions={routeWaypoints.map(([la, lo]) => [la, lo])}
+          pathOptions={{ color: "#3b82f6", weight: 3, dashArray: "8,6" }}
+        />
+      )}
       {routeWaypoints.map(([la, lo], i) => (
         <CircleMarker
           key={`wp${i}`}
           center={[la, lo]}
-          radius={6}
-          pathOptions={{ color: "#1e40af", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
+          radius={5}
+          pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
         >
-          <Tooltip direction="top">{i + 1}</Tooltip>
+          <Tooltip permanent direction="top">WP{i + 1}</Tooltip>
         </CircleMarker>
       ))}
+      {msaSectors.map((s) => {
+        const color = s.ttci ? riskColor(riskLevels, s.ttci.mean) : "#888";
+        const bounds: [[number, number], [number, number]] = [
+          [Math.min(s.from.lat, s.to.lat) - BUF_DEG, Math.min(s.from.lon, s.to.lon) - BUF_DEG],
+          [Math.max(s.from.lat, s.to.lat) + BUF_DEG, Math.max(s.from.lon, s.to.lon) + BUF_DEG],
+        ];
+        return (
+          <Rectangle
+            key={`sec${s.sector}`}
+            bounds={bounds}
+            pathOptions={{ color, fillColor: color, fillOpacity: 0.08, weight: 1, dashArray: "4,4" }}
+          >
+            <Popup>
+              <div className="font-sans text-xs">
+                <div className="font-bold">Sector {s.sector}</div>
+                <div>Min Safe Alt: <strong>{fmtInt(s.msa_ft)} ft</strong></div>
+                <div>Max terrain: {fmtInt(s.max_terrain_ft)} ft</div>
+              </div>
+            </Popup>
+          </Rectangle>
+        );
+      })}
     </>
-  );
-}
-
-function MapModeBanner() {
-  const { mode } = useTools();
-  if (mode === "idle") return null;
-  const hint = MODE_HINTS[mode];
-  if (!hint) return null;
-  return (
-    <div className="pointer-events-none absolute left-1/2 top-16 z-[700] -translate-x-1/2 panel-float px-4 py-2.5 text-body-sm font-medium text-foreground">
-      {hint}
-    </div>
   );
 }
 
@@ -248,9 +293,11 @@ function FlyRouteLayers() {
   if (!flyPosition) return null;
 
   const { clearance_ft, heading_deg } = flyPosition;
-  const fillColor = msaClearanceColor(clearance_ft);
-  const clearStatus = msaClearanceStatus(clearance_ft);
-  const glowAlpha = clearStatus === "WARNING" ? "0.55" : clearStatus === "CAUTION" ? "0.4" : "0.35";
+  const fillColor =
+    clearance_ft < 1500 ? "#e74c3c"
+    : clearance_ft < 3000 ? "#e67e22"
+    : "#2ecc71";
+  const glowAlpha = clearance_ft < 1500 ? "0.55" : clearance_ft < 3000 ? "0.4" : "0.35";
   const glow = fillColor.replace("#", "");
   const r = parseInt(glow.slice(0, 2), 16);
   const g = parseInt(glow.slice(2, 4), 16);
@@ -352,7 +399,7 @@ function CfitLayers() {
   );
 }
 
-/** Persistent TTCI risk legend — visible in both 2D and 3D (z-700 > Globe z-600). */
+/** Persistent TTCI risk legend */
 const FALLBACK_LEVELS = [
   { label: "Very Low", color: "#2ecc71" },
   { label: "Low",      color: "#f1c40f" },
@@ -368,19 +415,118 @@ function RiskLegend() {
     ? riskLevels.map((l) => ({ label: l.label, color: l.color }))
     : FALLBACK_LEVELS;
   return (
-    <div className="absolute bottom-7 left-3 z-[700] flex items-center gap-2 panel-float px-3 py-1.5">
-      <span className="text-label mr-1 mb-0">Risk</span>
+    <div className="absolute bottom-7 left-3 z-[700] flex items-center gap-2 rounded-lg border border-border/60 bg-card/92 px-3 py-1.5 shadow-lg backdrop-blur-sm">
+      <span className="mr-0.5 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-muted-foreground">
+        TTCI
+      </span>
       {levels.map((l) => (
         <div key={l.label} className="flex items-center gap-1">
           <span className="h-2.5 w-2.5 rounded-sm" style={{ background: l.color }} />
-          <span className="text-[11px] text-body">{l.label}</span>
+          <span className="text-[10px] text-muted-foreground">{l.label}</span>
         </div>
       ))}
     </div>
   );
 }
 
-/** Bottom instrument bar during route fly-through simulation. */
+/** Floating pilot HUD shown during Fly Route simulation. */
+function PilotHUD() {
+  const { flyPosition } = useTools();
+  const { riskLevels } = useTtci();
+  if (!flyPosition) return null;
+
+  const { elevation_m, msa_ft, clearance_ft, sectorLabel, progressPct, ttci } = flyPosition;
+  const elevation_ft = elevation_m / 0.3048;
+  const ttciColor = ttci != null ? riskColor(riskLevels, ttci) : "#888";
+
+  const clearStatus =
+    clearance_ft < 1500 ? "WARNING"
+    : clearance_ft < 3000 ? "CAUTION"
+    : "CLEAR";
+  const clearColor =
+    clearStatus === "WARNING" ? "#e74c3c"
+    : clearStatus === "CAUTION" ? "#e67e22"
+    : "#2ecc71";
+
+  return (
+    <div className="absolute right-3 top-16 z-[700] w-56 overflow-hidden rounded-xl border border-border/60 bg-card/96 shadow-2xl backdrop-blur-md">
+      {/* Header bar */}
+      <div className="flex items-center justify-between border-b border-border/50 bg-secondary/40 px-3 py-1.5">
+        <span className="font-mono text-[9px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+          Route Simulation
+        </span>
+        <span className="rounded bg-primary/20 px-2 py-0.5 font-mono text-[10px] font-bold text-primary">
+          {sectorLabel}
+        </span>
+      </div>
+
+      <div className="space-y-3 p-3">
+        {ttci != null && (
+          <div>
+            <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">TTCI Score</div>
+            <div className="font-mono text-2xl font-extrabold leading-none" style={{ color: ttciColor }}>
+              {ttci.toFixed(3)}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Terrain Elev</div>
+          <div className="font-mono text-lg font-bold leading-none">
+            {Math.round(elevation_m).toLocaleString()} m
+          </div>
+          <div className="font-mono text-[11px] text-muted-foreground">
+            {Math.round(elevation_ft).toLocaleString()} ft
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">
+            Min Safe Altitude
+          </div>
+          <div className="font-mono text-lg font-bold leading-none text-primary">
+            {Math.round(msa_ft).toLocaleString()} ft
+          </div>
+        </div>
+
+        {/* Clearance banner */}
+        <div
+          className={cn(
+            "rounded-lg border px-3 py-2 text-center",
+            clearStatus === "WARNING" && "animate-pulse border-risk-high/60 bg-risk-high/15",
+            clearStatus === "CAUTION" && "animate-obstacle-strobe border-2",
+            clearStatus === "CLEAR"   && "border-risk-vlow/40 bg-risk-vlow/8",
+          )}
+          style={clearStatus === "CAUTION" ? { borderColor: "rgba(230,126,34,0.9)" } : {}}
+        >
+          <div className="text-[9px] uppercase tracking-widest text-muted-foreground">Clearance</div>
+          <div className="font-mono text-2xl font-extrabold leading-none" style={{ color: clearColor }}>
+            {Math.round(clearance_ft).toLocaleString()} ft
+          </div>
+          <div className="mt-0.5 text-[10px] font-bold" style={{ color: clearColor }}>
+            {clearStatus}
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div>
+          <div className="mb-1 flex justify-between text-[9px] text-muted-foreground">
+            <span>Route progress</span>
+            <span className="font-mono">{Math.round(progressPct)}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className="h-full rounded-full bg-primary transition-all duration-100"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Full-width cockpit instrument strip shown at the bottom of the map during flight simulation. */
 function CockpitStrip() {
   const { flyPosition, msaProfile, msaSectors } = useTools();
   const { riskLevels } = useTtci();
@@ -388,8 +534,10 @@ function CockpitStrip() {
 
   const { elevation_m, msa_ft, clearance_ft, sectorLabel, progressPct, ttci } = flyPosition;
   const elevation_ft = elevation_m / 0.3048;
-  const clearStatus = msaClearanceStatus(clearance_ft);
-  const clearColor = msaClearanceColor(clearance_ft);
+  const clearStatus =
+    clearance_ft < 1500 ? "WARNING" : clearance_ft < 3000 ? "CAUTION" : "CLEAR";
+  const clearColor =
+    clearStatus === "WARNING" ? "#e74c3c" : clearStatus === "CAUTION" ? "#e67e22" : "#2ecc71";
   const ttciColor = ttci != null ? riskColor(riskLevels, ttci) : "#888";
 
   return (
@@ -398,29 +546,33 @@ function CockpitStrip() {
         {/* Left — key numbers */}
         <div className="flex w-52 flex-shrink-0 flex-col justify-around border-r border-border px-4 py-3">
           <div>
-            <div className="text-label">Terrain Elevation</div>
-            <div className="text-metric text-xl">
+            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              Terrain Elevation
+            </div>
+            <div className="font-mono text-xl font-bold leading-tight text-foreground">
               {Math.round(elevation_m).toLocaleString()} m
             </div>
-            <div className="text-metric text-[11px] text-muted-foreground">
+            <div className="font-mono text-[11px] text-muted-foreground">
               {Math.round(elevation_ft).toLocaleString()} ft
             </div>
           </div>
           <div>
-            <div className="text-label">Min Safe Altitude</div>
-            <div className="text-metric-accent text-xl">
+            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              Min Safe Altitude
+            </div>
+            <div className="font-mono text-xl font-bold leading-tight text-primary">
               {Math.round(msa_ft).toLocaleString()} ft
             </div>
           </div>
           <div className="flex items-end gap-4">
             <div>
-              <div className="text-label">Sector</div>
-              <div className="text-metric-accent">{sectorLabel}</div>
+              <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Sector</div>
+              <div className="font-mono text-sm font-bold text-primary">{sectorLabel}</div>
             </div>
             {ttci != null && (
               <div>
-                <div className="text-label">TTCI</div>
-                <div className="text-metric font-semibold" style={{ color: ttciColor }}>
+                <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">TTCI</div>
+                <div className="font-mono text-sm font-bold" style={{ color: ttciColor }}>
                   {ttci.toFixed(3)}
                 </div>
               </div>
@@ -442,17 +594,20 @@ function CockpitStrip() {
         <div className="flex w-44 flex-shrink-0 flex-col items-center justify-center gap-3 border-l border-border px-3 py-3">
           <div
             className={cn(
-              "w-full rounded border-2 px-2 py-2.5 text-center",
-              clearStatus === "WARNING" && "animate-pulse border-risk-high/70 bg-risk-high/12",
-              clearStatus === "CAUTION" && "border-risk-moderate/50 bg-risk-moderate/8",
-              clearStatus === "CLEAR"   && "border-risk-vlow/40 bg-risk-vlow/6",
+              "w-full rounded px-2 py-2.5 text-center",
+              clearStatus === "WARNING" && "animate-pulse border-2 border-risk-high/70 bg-risk-high/12",
+              clearStatus === "CAUTION" && "animate-obstacle-strobe border-2",
+              clearStatus === "CLEAR"   && "border border-risk-vlow/40 bg-risk-vlow/6",
             )}
+            style={clearStatus === "CAUTION" ? { borderColor: "rgba(230,126,34,0.9)" } : {}}
           >
-            <div className="text-label">Clearance</div>
-            <div className="text-metric-lg text-4xl font-bold" style={{ color: clearColor }}>
+            <div className="text-[9px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              Clearance
+            </div>
+            <div className="font-mono text-4xl font-black leading-tight" style={{ color: clearColor }}>
               {Math.round(clearance_ft).toLocaleString()}
             </div>
-            <div className="text-metric text-[10px] text-muted-foreground">ft</div>
+            <div className="font-mono text-[10px] text-muted-foreground">ft</div>
             <div className="mt-0.5 text-[11px] font-black tracking-wider" style={{ color: clearColor }}>
               {clearStatus}
             </div>
@@ -475,17 +630,47 @@ function CockpitStrip() {
   );
 }
 
-/** Full-screen red pulse overlay when terrain clearance drops to WARNING. */
+/**
+ * Full-screen WARNING overlay: red pulse + "TERRAIN — PULL UP" banner.
+ * CAUTION overlay: amber flash border + "OBSTACLE AHEAD" banner.
+ * Both trigger their respective audio cues via useTerrainAudio.
+ */
 function WarningOverlay() {
   const { flyPosition } = useTools();
-  if (!flyPosition || flyPosition.clearance_ft >= MSA_CLEARANCE_WARNING_FT) return null;
+  const { trigger } = useTerrainAudio();
 
+  const clearance = flyPosition?.clearance_ft ?? Infinity;
+  const level: "CLEAR" | "CAUTION" | "WARNING" =
+    clearance < 1500 ? "WARNING"
+    : clearance < 3000 ? "CAUTION"
+    : "CLEAR";
+
+  useEffect(() => {
+    trigger(level);
+  }, [level, trigger]);
+
+  if (!flyPosition || level === "CLEAR") return null;
+
+  if (level === "WARNING") {
+    return (
+      <div className="pointer-events-none absolute inset-0 z-[760]">
+        <div className="absolute inset-0 animate-pulse border-[6px] border-red-500/85" />
+        <div className="absolute left-0 right-0 top-0 flex items-center justify-center bg-red-600/95 py-2.5 backdrop-blur-sm">
+          <span className="animate-pulse font-mono text-sm font-black uppercase tracking-[0.28em] text-white">
+            ⚠ &nbsp;TERRAIN — PULL UP&nbsp; ⚠
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // CAUTION — amber flash with obstacle warning
   return (
     <div className="pointer-events-none absolute inset-0 z-[760]">
-      <div className="absolute inset-0 animate-pulse border-[6px] border-red-500/85" />
-      <div className="absolute left-0 right-0 top-0 flex items-center justify-center bg-red-600/95 py-2.5 backdrop-blur-sm">
-        <span className="animate-pulse font-mono text-sm font-black uppercase tracking-[0.28em] text-white">
-          ⚠ &nbsp;TERRAIN — PULL UP&nbsp; ⚠
+      <div className="animate-amber-flash absolute inset-0 border-[5px] border-amber-500/80" />
+      <div className="animate-amber-flash absolute left-0 right-0 top-0 flex items-center justify-center bg-amber-500/90 py-2 backdrop-blur-sm">
+        <span className="font-mono text-sm font-black uppercase tracking-[0.24em] text-white">
+          ⚠ &nbsp;OBSTACLE AHEAD — CAUTION&nbsp; ⚠
         </span>
       </div>
     </div>
@@ -494,41 +679,34 @@ function WarningOverlay() {
 
 export function MapView() {
   const { status, activeRegion, overlayVersion, activate, toast } = useTtci();
-  const { mode, setMode, view, setView, overlayOpacity, showOverlay, demSource, setDemSource } = useTools();
+  const { mode, setMode, view, setView, overlayOpacity, showOverlay } = useTools();
+  const [source, setSource] = useState("tiles");
   const onAreaRef = useRef<(b: Bounds) => void>(() => {});
+
+  // Step-by-step compute progress
+  const computing = status === "computing";
+  const { step, done } = useComputeProgress(computing);
 
   onAreaRef.current = async (b: Bounds) => {
     setMode("idle");
-    if (spanTooLarge(b)) {
-      toast(spanErrorMessage(b), "error");
-      return;
-    }
-    try { await activate(b, demSource); } catch { /* handled */ }
+    try { await activate(b, source); } catch { /* handled */ }
   };
 
-  const showPrompt =
-    !activeRegion && status !== "computing" && mode !== "draw-area";
+  const showPrompt = status === "empty" || (!activeRegion && status !== "computing");
 
   return (
     <div className="relative h-full w-full">
-      <MapContainer center={[25, 82]} zoom={3} className="h-full w-full" zoomControl={false} attributionControl>
-        <ZoomControl position="topright" />
-        <TileLayer
-          url={TILE_URL}
-          subdomains="abcd"
-          attribution="&copy; OpenStreetMap &copy; CARTO"
-          maxZoom={18}
-        />
+      <MapContainer center={[25, 82]} zoom={3} className="h-full w-full" zoomControl attributionControl>
+        <TileLayerThemed />
         {activeRegion && showOverlay && (
           <ImageOverlay
             key={overlayVersion}
-            url={`/api/ttci/overlay.png?v=${overlayVersion}`}
+            url={api.overlayUrl()}
             bounds={[[activeRegion.south, activeRegion.west], [activeRegion.north, activeRegion.east]]}
             opacity={overlayOpacity}
           />
         )}
         <FitToRegion />
-        <PrepareDrawArea />
         <ClickLayer />
         <DrawController onArea={(b) => onAreaRef.current(b)} />
         <MsaLayers />
@@ -537,19 +715,22 @@ export function MapView() {
         <CfitLayers />
       </MapContainer>
 
-      <MapModeBanner />
+      {/* Pilot HUD */}
+      <PilotHUD />
+
+      {/* Cockpit strip */}
       <CockpitStrip />
 
-      {/* WARNING overlay — full-screen red pulse when dangerously close to terrain */}
+      {/* WARNING / CAUTION overlay with audio */}
       <WarningOverlay />
 
-      {/* Risk legend — z-700, visible above both Leaflet and Cesium (z-600) */}
+      {/* Risk legend */}
       <RiskLegend />
 
-      {/* Map / Globe view toggle — bottom-right corner, unobtrusive */}
+      {/* Map / Globe view toggle */}
       <button
         onClick={() => setView(view === "2d" ? "3d" : "2d")}
-        className="absolute bottom-7 right-3 z-[700] panel-float px-3 py-1.5 text-[11px] font-semibold text-muted-foreground transition-colors hover:text-foreground"
+        className="absolute bottom-7 right-3 z-[700] rounded border border-border bg-card/90 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground shadow backdrop-blur transition-colors hover:border-primary hover:text-primary"
       >
         {view === "3d" ? "2D Map" : "3D Globe"}
       </button>
@@ -559,29 +740,30 @@ export function MapView() {
           setMode("draw-area");
           toast("Drag a box on the map to select the area to assess.", "info");
         }}
-        className="absolute left-3 top-3 z-[700] flex items-center gap-2 panel-float px-3.5 py-2 text-xs font-semibold transition-colors hover:text-foreground"
+        className="absolute left-3 top-3 z-[700] flex items-center gap-2 rounded-md border border-border bg-card/90 px-3 py-2 text-xs font-semibold shadow-md backdrop-blur transition-colors hover:border-primary hover:text-primary"
       >
         <Pencil className="h-3.5 w-3.5" /> Select area
       </button>
 
       {showPrompt && (
-        <div className="absolute inset-0 z-[680] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="w-[min(460px,calc(100%-48px))] panel p-8 text-center">
-            <h2 className="text-title mb-3 text-lg">
-              Where do you want to analyze?
+        <div className="absolute inset-0 z-[680] flex items-center justify-center bg-background/55 backdrop-blur-sm">
+          <div className="w-[min(460px,calc(100%-48px))] rounded-lg border border-border bg-card p-7 text-center shadow-lg">
+            <h2 className="mb-2 bg-gradient-to-r from-primary to-risk-critical bg-clip-text text-xl font-extrabold text-transparent">
+              Assess any terrain on Earth
             </h2>
-            <p className="text-hint mb-6">
-              Draw a region on the map or jump to a preset mountain area.
+            <p className="mb-5 text-sm text-muted-foreground">
+              Draw a box on the map to compute the Terrain Topography Complexity Index for that
+              area — or jump to a preset region below.
             </p>
             <div className="mb-4 flex items-center justify-center gap-2">
-              <Button onClick={() => { setMode("draw-area"); toast("Drag a box on the map.", "info"); }}>
-                <Pencil className="h-4 w-4" /> Draw on map
+              <Button onClick={() => { setMode("draw-area"); toast("Drag a box on the map to select the area.", "info"); }}>
+                <Pencil className="h-4 w-4" /> Draw area on map
               </Button>
               <label className="flex items-center gap-2 text-xs text-muted-foreground">
                 DEM
                 <select
-                  value={demSource}
-                  onChange={(e) => setDemSource(e.target.value)}
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
                   className="h-9 rounded-md border border-input bg-background px-2 text-sm"
                 >
                   <option value="tiles">SRTM 30 m</option>
@@ -594,8 +776,8 @@ export function MapView() {
               {PRESETS.map((p) => (
                 <button
                   key={p.name}
-                  onClick={() => activate(p.bbox, demSource).catch(() => {})}
-                  className="rounded-full border border-border bg-secondary px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
+                  onClick={() => activate(p.bbox, source).catch(() => {})}
+                  className="rounded-full border border-border px-3 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:border-primary hover:bg-primary/10 hover:text-primary"
                 >
                   {p.name}
                 </button>
@@ -605,11 +787,43 @@ export function MapView() {
         </div>
       )}
 
-      {status === "computing" && (
-        <div className="absolute inset-0 z-[690] flex items-center justify-center bg-background/80 backdrop-blur-sm">
-          <div className="panel flex flex-col items-center gap-3 px-8 py-6">
-            <div className="h-10 w-10 animate-spin rounded-full border-4 border-muted border-t-foreground" />
-            <span className="text-body-sm">Computing TTCI for the selected area…</span>
+      {/* ── Step-by-step compute progress overlay ── */}
+      {computing && (
+        <div className="absolute inset-0 z-[690] flex items-center justify-center bg-background/70 backdrop-blur">
+          <div className="w-72 rounded-xl border border-border bg-card p-6 shadow-2xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-muted border-t-primary" />
+              <div>
+                <div className="text-sm font-bold text-foreground">Computing TTCI</div>
+                <div className="text-[11px] text-muted-foreground">Processing DEM data…</div>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              {COMPUTE_STEPS.map((s, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 rounded-full border text-[8px] flex items-center justify-center font-bold",
+                      done[i]
+                        ? "border-emerald-500 bg-emerald-500 text-white"
+                        : i === step
+                        ? "animate-pulse border-primary bg-primary/20 text-primary"
+                        : "border-border bg-secondary",
+                    )}
+                  >
+                    {done[i] ? "✓" : ""}
+                  </span>
+                  <span
+                    className={cn(
+                      "font-mono text-[11px]",
+                      done[i] ? "text-emerald-600 line-through" : i === step ? "text-primary font-semibold" : "text-muted-foreground",
+                    )}
+                  >
+                    {s}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}
