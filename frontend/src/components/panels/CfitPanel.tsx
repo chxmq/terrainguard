@@ -189,7 +189,7 @@ export function CfitPanel() {
           <SectionHead>Composite vs single-metric</SectionHead>
           <p className="mb-2 text-[11px] text-muted-foreground">
             {HEATMAP_SITE.flight} — {HEATMAP_SITE.location}.
-            ✛ marks the accident impact cell. Same risk palette: green → red → purple.
+            A crosshair marks the accident impact cell. Same risk palette: green → red → purple.
           </p>
           <p className="mb-2 text-[10px] text-muted-foreground/70 italic">
             Note: composite TTCI ≈ elevation_std at coarse view.

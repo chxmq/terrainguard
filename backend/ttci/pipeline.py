@@ -253,7 +253,7 @@ def compute_ttci(elevation, cell_size=30.0, weights=None):
     else:
         validate_weights(weights)
         w = weights
-    logger.info("⏳ Computing terrain metrics...")
+    logger.info("Computing terrain metrics...")
     slope = compute_slope(elevation, cell_size)
     tri = compute_tri(elevation)
     curv = compute_curvature(elevation, cell_size)
@@ -264,7 +264,7 @@ def compute_ttci(elevation, cell_size=30.0, weights=None):
     # then restore no-data cells from the source elevation to NaN.
     ttci = np.clip(ttci, 0.0, 1.0)
     ttci[np.isnan(np.asarray(elevation, dtype=np.float64))] = np.nan
-    logger.info(f"✅ TTCI range: [{np.nanmin(ttci):.3f}, {np.nanmax(ttci):.3f}], mean: {np.nanmean(ttci):.3f}")
+    logger.info(f"TTCI range: [{np.nanmin(ttci):.3f}, {np.nanmax(ttci):.3f}], mean: {np.nanmean(ttci):.3f}")
     return {"ttci": ttci, "slope": slope, "tri": tri, "curvature": curv,
             "elevation_std": estd, "slope_norm": sn, "tri_norm": tn,
             "curvature_norm": cn, "elevation_std_norm": en}
@@ -368,7 +368,7 @@ def save_ttci_geotiff(ttci, profile, path):
 
     with rasterio.open(path, "w", **out_profile) as dst:
         dst.write(out, 1)
-    logger.info(f"💾 TTCI saved: {path}")
+    logger.info(f"TTCI saved: {path}")
     return path
 
 

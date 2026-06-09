@@ -120,22 +120,28 @@ export function SettingsPanel() {
             {([
               { id: "2d" as const, label: "2D Map", Icon: Map },
               { id: "3d" as const, label: "3D Globe", Icon: Globe2 },
-            ]).map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                type="button"
-                onClick={() => tools.setView(id)}
-                className={cn(
-                  "flex items-center justify-center gap-2 rounded-md border py-2.5 text-[12px] font-medium transition-colors",
-                  tools.view === id
-                    ? "border-foreground/25 bg-foreground/5 text-foreground"
-                    : "border-border bg-secondary/30 text-muted-foreground hover:border-foreground/15 hover:text-foreground",
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {label}
-              </button>
-            ))}
+            ]).map(({ id, label, Icon }) => {
+              const disabled = id === "3d" && tools.disable3D;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={disabled}
+                  title={disabled ? "Enable the 3D globe below to use this view" : label}
+                  onClick={() => tools.setView(id)}
+                  className={cn(
+                    "flex items-center justify-center gap-2 rounded-md border py-2.5 text-[12px] font-medium transition-colors",
+                    disabled && "cursor-not-allowed opacity-40",
+                    tools.view === id && !disabled
+                      ? "border-foreground/25 bg-foreground/5 text-foreground"
+                      : "border-border bg-secondary/30 text-muted-foreground hover:border-foreground/15 hover:text-foreground",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </SettingCard>
 
@@ -176,18 +182,27 @@ export function SettingsPanel() {
         </SettingCard>
 
         <SettingCard title="3D globe" icon={Globe2}>
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-muted-foreground">Terrain exaggeration</span>
-              <span className="text-metric-accent text-[11px]">{tools.globeExaggeration}×</span>
-            </div>
-            <Slider
-              min={1}
-              max={6}
-              step={0.5}
-              value={[tools.globeExaggeration]}
-              onValueChange={(v) => tools.setGlobeExaggeration(v[0])}
+          <div className="space-y-3">
+            <SettingRow
+              label="Disable 3D globe"
+              hint="Offline mode — skips CesiumJS and satellite imagery so the app runs as a lighter 2D-only tool when bandwidth is limited."
+              checked={tools.disable3D}
+              onChange={tools.setDisable3D}
             />
+            <div className={cn("space-y-2", tools.disable3D && "pointer-events-none opacity-40")}>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">Terrain exaggeration</span>
+                <span className="text-metric-accent text-[11px]">{tools.globeExaggeration}×</span>
+              </div>
+              <Slider
+                min={1}
+                max={6}
+                step={0.5}
+                value={[tools.globeExaggeration]}
+                onValueChange={(v) => tools.setGlobeExaggeration(v[0])}
+                disabled={tools.disable3D}
+              />
+            </div>
           </div>
         </SettingCard>
       </TabsContent>

@@ -143,7 +143,7 @@ def download_copernicus_dem(bbox: Tuple[float, float, float, float]) -> Copernic
     valid = np.isfinite(elevation)
     if valid.any():
         print(
-            f"🛰️  Copernicus GLO-30 DEM: {elevation.shape} from {len(corners)} tile(s), "
+            f"Copernicus GLO-30 DEM: {elevation.shape} from {len(corners)} tile(s), "
             f"range [{np.nanmin(elevation):.0f}, {np.nanmax(elevation):.0f}] m, ~{cell_size_m:.0f} m/px"
         )
     return CopernicusResult(

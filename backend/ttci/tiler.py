@@ -92,7 +92,7 @@ def generate_overlay_png(ttci_array, output_path):
     rgba = ttci_to_rgba(ttci_array)
     img = Image.fromarray(rgba, "RGBA")
     img.save(output_path)
-    print(f"🖼️  Overlay PNG saved: {output_path}")
+    print(f"Overlay PNG saved: {output_path}")
     return output_path
 
 
@@ -138,5 +138,5 @@ def generate_metadata_json(bounds, ttci_array, output_path):
     }
     with open(output_path, "w") as f:
         json.dump(meta, f, indent=2)
-    print(f"📋 Metadata saved: {output_path}")
+    print(f"Metadata saved: {output_path}")
     return meta

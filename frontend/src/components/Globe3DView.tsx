@@ -234,7 +234,7 @@ export function Globe3DView() {
             onClick={toggleTrack}
             className={tracking ? "animate-pulse" : ""}
           >
-            {tracking ? "✈ Tracking" : "✈ Track aircraft"}
+            {tracking ? "Tracking" : "Track aircraft"}
           </Button>
         </div>
       )}

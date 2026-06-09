@@ -125,6 +125,10 @@ interface ToolsState {
   showUasTab: boolean;
   setShowUasTab: (b: boolean) => void;
 
+  /** Offline / lightweight mode: hide the 3D globe entirely and never load Cesium. */
+  disable3D: boolean;
+  setDisable3D: (b: boolean) => void;
+
   sidebarOpen: boolean;
   setSidebarOpen: (b: boolean) => void;
 
@@ -177,6 +181,7 @@ interface PersistedSettings {
   showTawsTab: boolean;
   showUasTab: boolean;
   sidebarOpen: boolean;
+  disable3D: boolean;
 }
 
 const SETTINGS_DEFAULTS: PersistedSettings = {
@@ -190,6 +195,7 @@ const SETTINGS_DEFAULTS: PersistedSettings = {
   showTawsTab: true,
   showUasTab: true,
   sidebarOpen: true,
+  disable3D: false,
 };
 
 function readPersistedSettings(): PersistedSettings {
@@ -224,11 +230,17 @@ const Ctx = createContext<ToolsState | null>(null);
 export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const initial = readPersistedSettings();
   const [mode, _setMode] = useState<ToolMode>("idle");
-  const [view, _setView] = useState<ViewMode>(initial.view);
+  const [disable3D, _setDisable3D] = useState<boolean>(initial.disable3D);
+  // Honour offline mode on first load: never start in a 3D view that we won't render.
+  const [view, _setView] = useState<ViewMode>(initial.disable3D ? "2d" : initial.view);
   const [pendingMapFocus, setPendingMapFocus] = useState<MapFocus | null>(null);
   const globeViewGetterRef = useRef<GlobeViewGetter>(null);
   const mapViewGetterRef = useRef<MapViewGetter>(null);
   const pendingGlobeFocusRef = useRef<MapFocus | null>(null);
+  const viewRef = useRef<ViewMode>(view);
+  const disable3DRef = useRef<boolean>(disable3D);
+  viewRef.current = view;
+  disable3DRef.current = disable3D;
 
   const setMode = (m: ToolMode) => {
     if (
@@ -259,28 +271,50 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     return pose;
   }, []);
 
-  const setView = useCallback((v: ViewMode) => {
-    if (v === "3d") {
-      const pose = mapViewGetterRef.current?.();
-      if (pose) pendingGlobeFocusRef.current = pose;
-    }
-    _setView(v);
-  }, []);
-
-  const beginDrawArea = useCallback(() => {
-    if (view === "3d") {
-      const pose = globeViewGetterRef.current?.();
-      if (pose) {
-        setPendingMapFocus({
-          lat: pose.lat,
-          lon: pose.lon,
-          zoom: Math.round(pose.zoom),
-        });
+  /**
+   * Switch 2D ↔ 3D, syncing the camera in BOTH directions so the two views stay
+   * aligned. When `capture` is true (the default) and the view actually changes,
+   * the source view's current pose is captured and handed to the destination
+   * view: map center/zoom → globe on 2D→3D, and globe center/zoom → map on
+   * 3D→2D. Callers that set their own focus target (focusMap, beginDrawArea)
+   * pass `capture = false` so they are not clobbered.
+   *
+   * In offline mode (`disable3D`) a request for "3d" is coerced to "2d" so the
+   * unrendered globe is never made the active view.
+   */
+  const changeView = useCallback((v: ViewMode, capture = true) => {
+    let target = v;
+    if (disable3DRef.current && target === "3d") target = "2d";
+    const changed = target !== viewRef.current;
+    if (capture && changed) {
+      if (target === "3d") {
+        const pose = mapViewGetterRef.current?.();
+        if (pose) pendingGlobeFocusRef.current = pose;
+      } else {
+        const pose = globeViewGetterRef.current?.();
+        if (pose) {
+          setPendingMapFocus({ lat: pose.lat, lon: pose.lon, zoom: Math.round(pose.zoom) });
+        }
       }
     }
-    setView("2d");
+    _setView(target);
+  }, []);
+
+  const setView = useCallback((v: ViewMode) => changeView(v), [changeView]);
+
+  const setDisable3D = useCallback((off: boolean) => {
+    _setDisable3D(off);
+    // Leaving the user stranded on a hidden globe would freeze the app, so fall
+    // back to the 2D map whenever 3D is turned off mid-session.
+    if (off && viewRef.current === "3d") changeView("2d");
+  }, [changeView]);
+
+  const beginDrawArea = useCallback(() => {
+    // changeView captures the globe pose into the pending map focus on 3D→2D,
+    // so the 2D map opens centered where the user was looking in 3D.
+    changeView("2d");
     _setMode("draw-area");
-  }, [view]);
+  }, [changeView]);
 
   const toggleDrawArea = useCallback(() => {
     if (mode === "draw-area") {
@@ -374,10 +408,11 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
       showTawsTab,
       showUasTab,
       sidebarOpen,
+      disable3D,
     });
   }, [
     view, showOverlay, overlayOpacity, cfitShown, globeExaggeration, demSource,
-    showMsaTab, showTawsTab, showUasTab, sidebarOpen,
+    showMsaTab, showTawsTab, showUasTab, sidebarOpen, disable3D,
   ]);
 
   useEffect(() => {
@@ -387,8 +422,10 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
 
   const focusMap = useCallback((lat: number, lon: number, zoom = 10) => {
     setPendingMapFocus({ lat, lon, zoom });
-    setView("2d");
-  }, []);
+    // capture=false: this is an explicit focus target, don't overwrite it with
+    // the globe pose when coming from 3D.
+    changeView("2d", false);
+  }, [changeView]);
 
   const addHistoryPin = useCallback((lat: number, lon: number, title?: string) => {
     const pinCount = historyItems.filter((h) => h.lat != null).length;
@@ -465,6 +502,7 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     overlayOpacity, setOverlayOpacity, showOverlay, setShowOverlay,
     demSource, setDemSource, globeExaggeration, setGlobeExaggeration,
     showMsaTab, setShowMsaTab, showTawsTab, setShowTawsTab, showUasTab, setShowUasTab,
+    disable3D, setDisable3D,
     sidebarOpen, setSidebarOpen,
     historyItems, selectedHistoryId, setSelectedHistoryId,
     addHistoryPin, addHistoryNote, updateHistoryItem, removeHistoryItem, focusMap,

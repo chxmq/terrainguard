@@ -101,7 +101,7 @@ def _evaluate_accident(
     try:
         patch = download_terrain_dem(bbox, zoom=zoom)
     except Exception as exc:  # noqa: BLE001 — skip sites without tile coverage
-        print(f"⚠️  Skipping {accident.flight}: DEM unavailable ({exc}).")
+        print(f"Skipping {accident.flight}: DEM unavailable ({exc}).")
         return None
 
     result = compute_ttci(patch.elevation, cell_size=patch.cell_size_m)
@@ -110,12 +110,12 @@ def _evaluate_accident(
 
     row, col = coord_to_cell(patch.transform, accident.lat, accident.lon)
     if not (0 <= row < rows and 0 <= col < cols):
-        print(f"⚠️  Skipping {accident.flight}: crash cell outside patch.")
+        print(f"Skipping {accident.flight}: crash cell outside patch.")
         return None
 
     site_ttci = float(ttci[row, col])
     if math.isnan(site_ttci):
-        print(f"⚠️  Skipping {accident.flight}: no-data at crash cell.")
+        print(f"Skipping {accident.flight}: no-data at crash cell.")
         return None
 
     dist_km = _cell_distance_km(patch.transform, rows, cols, accident.lat, accident.lon)
@@ -234,7 +234,7 @@ def run_validation(zoom: int = 11) -> Dict:
     tile cache; fast once warmed.
     """
     rng = np.random.default_rng(RANDOM_SEED)
-    print(f"🔬 Validating TTCI against {len(CFIT_ACCIDENTS)} CFIT accident sites...")
+    print(f"Validating TTCI against {len(CFIT_ACCIDENTS)} CFIT accident sites...")
 
     per_site: List[Dict] = []
     control_cell_chunks: List[np.ndarray] = []
@@ -357,7 +357,7 @@ def _sample_global_controls(
         try:
             patch = download_terrain_dem(bbox, zoom=zoom)
         except Exception as exc:  # noqa: BLE001
-            print(f"⚠️  Skipping global region {name}: DEM unavailable ({exc})")
+            print(f"Skipping global region {name}: DEM unavailable ({exc})")
             continue
 
         result = compute_ttci(patch.elevation, cell_size=patch.cell_size_m)
@@ -391,7 +391,7 @@ def _sample_global_controls(
             "name": name, "lat": lat, "lon": lon,
             "n_cells": n_sampled, "mean_ttci": round(mean_ttci, 4),
         })
-        print(f"   ✓ {name}: {n_sampled} cells  (mean TTCI {mean_ttci:.3f})")
+        print(f"   {name}: {n_sampled} cells  (mean TTCI {mean_ttci:.3f})")
 
     return {
         "controls_cell":  np.concatenate(all_cells) if all_cells else np.array([]),
@@ -423,7 +423,7 @@ def run_global_validation(zoom: int = 11) -> Dict:
     report is fully self-contained.
     """
     rng = np.random.default_rng(GLOBAL_RANDOM_SEED)
-    print(f"🌍 Global-control validation: {len(CFIT_ACCIDENTS)} accidents vs global terrain…")
+    print(f"Global-control validation: {len(CFIT_ACCIDENTS)} accidents vs global terrain…")
 
     # --- Accident sites (reuse _evaluate_accident; tiles are cached) ----------
     accident_rng = np.random.default_rng(RANDOM_SEED)
@@ -446,10 +446,10 @@ def run_global_validation(zoom: int = 11) -> Dict:
     if not per_site:
         raise RuntimeError("Global validation: no usable accident sites.")
 
-    print(f"   ✓ {len(per_site)} accident sites evaluated")
+    print(f"   {len(per_site)} accident sites evaluated")
 
     # --- Global reference controls -------------------------------------------
-    print("📡 Sampling global reference terrain…")
+    print("Sampling global reference terrain…")
     ctrl = _sample_global_controls(zoom, rng)
     controls_cell = ctrl["controls_cell"]
     controls_nbhd = ctrl["controls_nbhd"]
@@ -515,5 +515,5 @@ def save_report(report: Dict, path: str) -> str:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
         json.dump(report, f, indent=2)
-    print(f"💾 Validation report saved: {path}")
+    print(f"Validation report saved: {path}")
     return path

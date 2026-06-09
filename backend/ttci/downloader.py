@@ -174,10 +174,10 @@ def download_dem(south: float, north: float, west: float, east: float,
     # bounding box and source (see ``get_dem_filename``), so cache reuse is fully
     # deterministic for a given request (Requirement 1.4).
     if filepath.exists() and not force_redownload:
-        logger.info(f"✅ Using cached DEM: {filepath}")
+        logger.info(f"Using cached DEM: {filepath}")
         return str(filepath)
 
-    logger.info(f"📥 Downloading {dem_type} DEM for bbox: [{south}, {north}, {west}, {east}]...")
+    logger.info(f"Downloading {dem_type} DEM for bbox: [{south}, {north}, {west}, {east}]...")
 
     params = {
         "demtype": demtype,
@@ -222,7 +222,7 @@ def download_dem(south: float, north: float, west: float, east: float,
     # the cache path.
     _write_dem_atomic(filepath, response.content)
 
-    logger.info(f"✅ DEM saved: {filepath} ({len(response.content) / 1024 / 1024:.1f} MB)")
+    logger.info(f"DEM saved: {filepath} ({len(response.content) / 1024 / 1024:.1f} MB)")
     return str(filepath)
 
 
@@ -338,10 +338,10 @@ def load_dem(filepath: str) -> tuple:
 
     # Report the valid-data range without choking on an all-no-data raster.
     if np.any(np.isfinite(elevation)):
-        logger.info(f"📊 DEM loaded: {elevation.shape}, range: "
+        logger.info(f"DEM loaded: {elevation.shape}, range: "
                     f"[{np.nanmin(elevation):.0f}, {np.nanmax(elevation):.0f}] m")
     else:
-        logger.info(f"📊 DEM loaded: {elevation.shape}, no valid elevation cells "
+        logger.info(f"DEM loaded: {elevation.shape}, no valid elevation cells "
                     f"(all no-data)")
 
     return elevation, profile, transform, crs, bounds
@@ -422,7 +422,7 @@ def generate_synthetic_dem(rows: int = 500, cols: int = 500,
     with rasterio.open(filepath, "w", **profile) as dst:
         dst.write(elevation, 1)
     
-    logger.info(f"🏔️  Synthetic DEM generated: {elevation.shape}, "
+    logger.info(f"Synthetic DEM generated: {elevation.shape}, "
                 f"range: [{elevation.min():.0f}, {elevation.max():.0f}] m")
     
     return elevation, profile, transform, crs, bounds
@@ -591,7 +591,7 @@ def acquire_dem(bbox: Sequence[float], dem_type: str = "srtm30",
     except Exception as exc:
         if not allow_synthetic_fallback:
             raise
-        logger.warning(f"⚠️  Real DEM acquisition via {resolved!r} failed ({exc}); "
+        logger.warning(f"Real DEM acquisition via {resolved!r} failed ({exc}); "
                        f"falling back to synthetic demonstration DEM.")
 
     # Last resort: labelled synthetic demo terrain.

@@ -9,11 +9,11 @@ import { TtciProvider } from "@/state/ttci";
 import { ToolsProvider, useTools } from "@/state/tools";
 
 function MapPane() {
-  const { view } = useTools();
+  const { view, disable3D } = useTools();
   return (
     <div className="relative flex-1 overflow-hidden">
       {view === "2d" && <MapView />}
-      <Globe3DView />
+      {!disable3D && <Globe3DView />}
     </div>
   );
 }

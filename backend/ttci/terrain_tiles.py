@@ -236,7 +236,7 @@ def download_terrain_dem(
     valid = np.isfinite(destination)
     if valid.any():
         logger.info(
-            f"🛰️  Real DEM acquired: {destination.shape} from {fetched}/{tile_count} "
+            f"Real DEM acquired: {destination.shape} from {fetched}/{tile_count} "
             f"tiles @ z{zoom}, range "
             f"[{np.nanmin(destination):.0f}, {np.nanmax(destination):.0f}] m, "
             f"~{cell_size_m:.0f} m/px"

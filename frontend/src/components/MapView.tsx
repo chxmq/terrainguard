@@ -697,7 +697,7 @@ function TawsLayers() {
         radius={7}
         pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
       >
-        <Tooltip permanent direction="center">✈</Tooltip>
+        <Tooltip permanent direction="center">AC</Tooltip>
       </CircleMarker>
       {tawsResult?.trigger && (
         <CircleMarker
@@ -1003,7 +1003,7 @@ function WarningOverlay() {
         <div className="absolute inset-0 animate-pulse border-[6px] border-red-500/85" />
         <div className="absolute left-0 right-0 top-0 flex items-center justify-center bg-red-600/95 py-2.5 backdrop-blur-sm">
           <span className="animate-pulse font-mono text-sm font-black uppercase tracking-[0.28em] text-white">
-            ⚠ &nbsp;TERRAIN — PULL UP&nbsp; ⚠
+            TERRAIN — PULL UP
           </span>
         </div>
       </div>
@@ -1016,7 +1016,7 @@ function WarningOverlay() {
       <div className="animate-amber-flash absolute inset-0 border-[5px] border-amber-500/80" />
       <div className="animate-amber-flash absolute left-0 right-0 top-0 flex items-center justify-center bg-amber-500/90 py-2 backdrop-blur-sm">
         <span className="font-mono text-sm font-black uppercase tracking-[0.24em] text-white">
-          ⚠ &nbsp;OBSTACLE AHEAD — CAUTION&nbsp; ⚠
+          OBSTACLE AHEAD — CAUTION
         </span>
       </div>
     </div>
@@ -1089,11 +1089,11 @@ function HoverTelemetryHUD({ sample }: { sample: HoverSample | null }) {
   const { riskLevels } = useTtci();
 
   const status = sample
-    ? sample.ttci >= 0.8 ? { label: "CRITICAL NO-FLY", dot: "🔴" }
-      : sample.ttci >= 0.6 ? { label: "HIGH RISK", dot: "🟠" }
-      : sample.ttci >= 0.4 ? { label: "MODERATE", dot: "🟡" }
-      : sample.ttci >= 0.2 ? { label: "CAUTION", dot: "🟢" }
-      : { label: "SAFE", dot: "🟢" }
+    ? sample.ttci >= 0.8 ? { label: "CRITICAL NO-FLY" }
+      : sample.ttci >= 0.6 ? { label: "HIGH RISK" }
+      : sample.ttci >= 0.4 ? { label: "MODERATE" }
+      : sample.ttci >= 0.2 ? { label: "CAUTION" }
+      : { label: "SAFE" }
     : null;
   const ttciColor = sample ? riskColor(riskLevels, sample.ttci) : "#888";
 
@@ -1112,8 +1112,9 @@ function HoverTelemetryHUD({ sample }: { sample: HoverSample | null }) {
             <div className="font-mono text-2xl font-extrabold leading-none" style={{ color: ttciColor }}>
               {sample.ttci.toFixed(3)}
             </div>
-            <div className="mt-1 text-[11px] font-bold" style={{ color: ttciColor }}>
-              {status?.dot} {status?.label}
+            <div className="mt-1 flex items-center gap-1.5 text-[11px] font-bold" style={{ color: ttciColor }}>
+              <span className="h-2 w-2 rounded-full" style={{ background: ttciColor }} />
+              {status?.label}
             </div>
           </div>
 
@@ -1155,7 +1156,7 @@ export function MapView() {
     mode, setMode, toggleDrawArea, view, setView,
     overlayOpacity, showOverlay, demSource,
     showMsaTab, showTawsTab, showUasTab,
-    flyPosition,
+    flyPosition, disable3D,
   } = useTools();
   const drawingArea = mode === "draw-area";
   const onAreaRef = useRef<(b: Bounds) => void>(() => {});
@@ -1227,12 +1228,14 @@ export function MapView() {
       <RiskLegend />
 
       {/* Map / Globe view toggle */}
-      <button
-        onClick={() => setView(view === "2d" ? "3d" : "2d")}
-        className="absolute bottom-7 right-3 z-[700] rounded border border-border bg-card/90 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground shadow backdrop-blur transition-colors hover:border-foreground/25 hover:text-foreground"
-      >
-        {view === "3d" ? "2D Map" : "3D Globe"}
-      </button>
+      {!disable3D && (
+        <button
+          onClick={() => setView(view === "2d" ? "3d" : "2d")}
+          className="absolute bottom-7 right-3 z-[700] rounded border border-border bg-card/90 px-3 py-1.5 font-mono text-[11px] font-bold uppercase tracking-wider text-muted-foreground shadow backdrop-blur transition-colors hover:border-foreground/25 hover:text-foreground"
+        >
+          {view === "3d" ? "2D Map" : "3D Globe"}
+        </button>
+      )}
 
       <button
         type="button"
@@ -1274,9 +1277,7 @@ export function MapView() {
                         ? "animate-pulse border-foreground/40 bg-foreground/10 text-foreground"
                         : "border-border bg-secondary",
                     )}
-                  >
-                    {done[i] ? "✓" : ""}
-                  </span>
+                  />
                   <span
                     className={cn(
                       "font-mono text-[11px]",
