@@ -101,7 +101,7 @@ _state: Dict[str, Any] = {
     "source": None,
 }
 
-_VALID_REGION_SOURCES = frozenset({"tiles", "copernicus", "opentopo"})
+_VALID_REGION_SOURCES = frozenset({"tiles", "copernicus", "opentopo", "auto"})
 
 # Single, descriptive message used by every readiness guard so that all TTCI data
 # endpoints fail closed with an identical, recognizable 503 response.
@@ -114,7 +114,7 @@ def _normalize_region_source(source: Optional[str]) -> str:
     if s not in _VALID_REGION_SOURCES:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid source {source!r}. Must be one of: tiles, copernicus, opentopo.",
+            detail=f"Invalid source {source!r}. Must be one of: tiles, copernicus, opentopo, auto.",
         )
     return s
 
