@@ -13,6 +13,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
+
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +35,7 @@ from ttci.msa import (
 )
 from ttci.geo import coord_to_cell, validate_coordinate
 from ttci.taws import look_ahead_taws
+from ttci.uas_pathfinder import plan_uas_route
 
 logging.basicConfig(
     level=logging.INFO,
@@ -461,6 +466,14 @@ class TawsCheckRequest(BaseModel):
     altitude_ft: float
 
 
+class UasPlanRouteRequest(BaseModel):
+    """Start/end points and flight limits for risk-aware UAS route planning."""
+    start: List[float]  # [lat, lon]
+    end: List[float]
+    max_altitude_m: float = 8000.0
+    max_ttci: float = 0.6
+
+
 class CorridorRequest(BaseModel):
     """A UAS corridor geometry to score against the TTCI surface.
 
@@ -771,6 +784,12 @@ async def region_grid(
     span = max(elev_max - elev_min, 1.0)
     elev_norm = np.clip((elev_ds - elev_min) / span, 0.0, 1.0)
 
+    # Component metric grids (real units) so the client can render a live terrain
+    # readout under the cursor without a round-trip per mouse move: slope in
+    # degrees (Horn) and TRI in metres (Riley). Filled at 0 over no-data.
+    slope_ds = _downsample(r["slope"], rows, cols, fill=0.0)
+    tri_ds = _downsample(r["tri"], rows, cols, fill=0.0)
+
     b = r["bounds"]
     return {
         "rows": rows, "cols": cols,
@@ -779,6 +798,9 @@ async def region_grid(
         "source_label": r.get("source_label"),
         "ttci": ttci.tolist(),
         "elevation": elev_norm.tolist(),
+        "elevation_m": np.round(elev_ds, 1).tolist(),
+        "slope_deg": np.round(slope_ds, 2).tolist(),
+        "tri_m": np.round(tri_ds, 2).tolist(),
     }
 
 
@@ -1285,6 +1307,49 @@ async def uas_corridor(req: CorridorRequest):
         "dominant_risk_level": dominant_label,
         "dominant_risk_color": dominant_color,
     }
+
+
+@app.post("/api/uas/plan-route")
+async def uas_plan_route(req: UasPlanRouteRequest):
+    """Plan a low-risk UAS path between two points on the active TTCI surface.
+
+    Downsamples the cached elevation/TTCI grids and runs A* with hard constraints
+    (flight ceiling, max TTCI) and soft TTCI penalties. Returns a geographic path
+    on success, or a structured ``error``/``detail`` diagnostic when no safe
+    corridor exists (launch/landing blocked, risk limits, or terrain choke).
+    """
+    _require_ready()
+
+    if len(req.start) != 2 or len(req.end) != 2:
+        raise HTTPException(
+            status_code=400,
+            detail="start and end must each be a [lat, lon] pair.",
+        )
+
+    try:
+        start_lat, start_lon = validate_coordinate(req.start[0], req.start[1])
+        end_lat, end_lon = validate_coordinate(req.end[0], req.end[1])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    r = _state["results"]
+    try:
+        result = plan_uas_route(
+            r["elevation"],
+            r["ttci"],
+            r["transform"],
+            r["bounds"],
+            start_lat,
+            start_lon,
+            end_lat,
+            end_lon,
+            float(req.max_altitude_m),
+            float(req.max_ttci),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return result
 
 
 # --- TTCI ↔ CFIT validation (evidence the index predicts real accidents) ---

@@ -28,10 +28,12 @@
 - [Architecture](#architecture)
 - [Repository layout](#repository-layout)
 - [Getting started](#getting-started)
+- [Makefile](#makefile)
 - [Configuration](#configuration)
 - [DEM data sources](#dem-data-sources)
 - [CFIT validation](#cfit-validation)
 - [Performance](#performance)
+- [Deployment](#deployment)
 - [API reference](#api-reference)
 - [Testing](#testing)
 - [Limitations](#limitations)
@@ -47,10 +49,10 @@ Terrain Guard:
 1. **Ingests open DEM data** (SRTM, Copernicus GLO-30, or OpenTopography) for any user-selected area on Earth.
 2. **Computes TTCI** — a normalized `[0, 1]` complexity score from slope, ruggedness, curvature, and local relief.
 3. **Serves an interactive application** with a 2D Leaflet risk map and a 3D Cesium globe draped over exaggerated terrain relief.
-4. **Runs aviation-safety tools** on top of the active TTCI surface: point query, route MSA, predictive TAWS look-ahead, and UAS corridor scoring.
+4. **Runs aviation-safety tools** on top of the active TTCI surface: point query, route MSA, predictive TAWS look-ahead, UAS corridor scoring, and risk-aware UAS route planning (A*).
 5. **Validates the index** against 15 documented historical CFIT accidents using a matched case–control study.
 
-No area is hard-coded. The user draws a region on the map; the backend computes TTCI on demand and publishes it as the active surface for every tool and overlay.
+No area is hard-coded by default. The user draws a region on the map; the backend computes TTCI on demand and publishes it as the active surface for every tool and overlay. Optional startup preload (`TTCI_PRELOAD=1`) is available for demos.
 
 ---
 
@@ -73,9 +75,9 @@ No area is hard-coded. The user draws a region on the map; the backend computes 
 | **Map (2D)** | World view, draw-to-select region, TTCI overlay toggle/opacity, point click query, route/corridor/aircraft/history-pin drawing |
 | **Globe (3D)** | Keyless CesiumJS, Esri World Imagery base, custom DEM relief, TTCI imagery drape, route + MSA labels, aircraft fly simulation, chase camera, reposition / fit-region controls |
 | **Overview** | Active-region stats, risk bands, last map-click TTCI breakdown |
-| **Route** | Multi-waypoint MSA per 25 NM sector buffer, terrain profile chart, animated 3D fly route with clearance-based audio alert |
+| **Route** | Multi-waypoint MSA per sector (5 NM buffer each side · 10 NM corridor), terrain profile chart, animated 3D fly route with clearance-based audio alert |
 | **Alerts** | EGPWS-style look-ahead terrain check modulated by local TTCI |
-| **UAS** | Corridor waypoint scoring with per-segment TTCI risk |
+| **UAS** | **Assess corridor** — draw waypoints, score per-segment TTCI risk · **Plan route** — pick start/end, set altitude & max TTCI limits, A* path with failure diagnostics |
 | **Accidents** | Loads `validation_report.json` + global report; per-site patch heatmaps via API |
 | **History** | Client-side map pins and notes (`localStorage`) |
 | **Settings** | Light / dark / system theme, 2D vs 3D default view, DEM source, overlay controls, tool tab visibility, globe exaggeration |
@@ -126,11 +128,13 @@ flowchart LR
     Pipe["pipeline.py — TTCI"]
     MSA["msa.py"]
     TAWS["taws.py"]
+    UAS["uas_pathfinder.py — A* routing"]
     Tiler["tiler.py — PNG overlays"]
     Val["validation.py"]
     Routes --> Pipe
     Routes --> MSA
     Routes --> TAWS
+    Routes --> UAS
     Routes --> Tiler
     Routes --> Val
   end
@@ -197,10 +201,11 @@ sequenceDiagram
 │   │   ├── geo.py               # Coordinate ↔ cell mapping
 │   │   ├── msa.py               # Minimum Safe Altitude + profiles
 │   │   ├── taws.py              # Predictive look-ahead alerting
+│   │   ├── uas_pathfinder.py    # Risk-aware UAS A* route planner
 │   │   ├── tiler.py             # TTCI overlay PNG rendering
 │   │   ├── cfit_accidents.py    # 15 curated CFIT accident sites
 │   │   └── validation.py        # Case–control validation engine
-│   ├── tests/                   # 48 pytest + Hypothesis tests
+│   ├── tests/                   # 52 pytest + Hypothesis tests
 │   └── data/                    # Generated overlays & validation JSON (gitignored except reports checked in)
 ├── frontend/
 │   ├── public/
@@ -211,6 +216,9 @@ sequenceDiagram
 │       ├── components/          # MapView, Globe3DView, panels, charts
 │       ├── state/               # ttci.tsx (surface) · tools.tsx (interaction)
 │       └── lib/                 # api.ts · globe3d.ts · theme · notifications
+├── Makefile                     # make · make dev · make demo · make test
+├── Dockerfile                   # Production image (API + built SPA)
+├── render.yaml                  # Render.com blueprint
 └── docs/images/                 # README screenshots & logo
 ```
 
@@ -222,20 +230,55 @@ sequenceDiagram
 
 - **Python 3.11+** with `pip`
 - **Node.js 18+** with `npm`
+- **GNU Make** (optional but recommended — included on macOS/Linux)
 
-### 1 · Backend
+### Quick start (recommended)
+
+From the repository root:
+
+```bash
+make              # install deps + run API (:8000) + Vite (:5173)
+```
+
+Open **http://127.0.0.1:5173** in your browser (Vite proxies `/api` to the backend). Press **Ctrl+C** to stop both servers.
+
+Other useful targets: `make demo` (single URL on :8000), `make demo-preload` (Ladakh preloaded for judging), `make test`, `make help`.
+
+---
+
+## Makefile
+
+| Command | Purpose |
+| --- | --- |
+| `make` / `make dev` | Install if needed, then run backend + frontend with hot reload |
+| `make demo` | Build SPA and serve API + app on **http://127.0.0.1:8000** |
+| `make demo-preload` | Same as `demo`, with Ladakh TTCI computed at startup |
+| `make install` | Python venv + `npm install` only |
+| `make test` | Backend pytest suite |
+| `make check` | Tests + production frontend build |
+| `make validate` | Regenerate CFIT validation report (network; slow) |
+| `make docker-run` | Build and run the production Docker image locally |
+| `make clean` | Remove caches and `frontend/dist` |
+
+Override ports: `make dev PORT=9000 VITE_PORT=3000`.
+
+---
+
+### Manual setup (alternative)
+
+#### Backend
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn main:app --reload         # → http://127.0.0.1:8000
 ```
 
 The API starts with **no preloaded region** unless `TTCI_PRELOAD=1` is set. Use **Select area** in the UI to compute TTCI for any bbox.
 
-### 2 · Frontend (development)
+#### Frontend (development)
 
 ```bash
 cd frontend
@@ -243,24 +286,22 @@ npm install
 npm run dev                       # → http://localhost:5173  (proxies /api → :8000)
 ```
 
-Open **http://localhost:5173** for hot reload during development.
-
-### 3 · Single-origin demo build
+#### Single-origin demo build
 
 ```bash
-cd frontend
-npm run build                     # writes frontend/dist
-# With the backend still running, open http://127.0.0.1:8000
+make demo                         # or: cd frontend && npm run build && cd ../backend && uvicorn main:app
 ```
 
 FastAPI serves both the API and the built SPA from one origin.
 
 ### Quick workflow
 
-1. Open the app → click **Select area** (top-left of the 2D map) → draw a rectangle.
-2. Wait for TTCI computation → colored overlay appears.
-3. Click the map for a point query, or open **Route**, **Alerts**, or **UAS** in the sidebar.
-4. Switch to **3D Globe** for relief + fly simulation.
+1. Run `make` and open **http://127.0.0.1:5173**.
+2. Click **Select area** (top-left of the 2D map) → draw a rectangle.
+3. Wait for TTCI computation → colored overlay appears.
+4. Click the map for a point query, or open **Route**, **Alerts**, or **UAS** in the sidebar.
+5. In **UAS → Plan route**, pick start/end, set limits, and click **Find safe corridor**.
+6. Switch to **3D Globe** for relief + MSA fly simulation.
 
 ---
 
@@ -303,9 +344,15 @@ Terrain Guard validates TTCI against **15 curated CFIT accidents** (`ttci/cfit_a
 Generate or refresh reports:
 
 ```bash
-cd backend
-python validate_ttci.py          # → data/validation_report.json
-python validate_ttci_global.py   # → data/validation_report_global.json
+make validate          # → backend/data/validation_report.json
+make validate-global   # → backend/data/validation_report_global.json
+```
+
+Or manually:
+
+```bash
+cd backend && .venv/bin/python validate_ttci.py
+cd backend && .venv/bin/python validate_ttci_global.py
 ```
 
 Results from the checked-in local report (`n_controls = 6000`):
@@ -334,11 +381,25 @@ Per-metric AUC (slope, TRI, curvature, elevation σ): 0.63–0.69. The **Acciden
 ## Performance
 
 ```bash
-cd backend
-python benchmark.py
+make benchmark
 ```
 
 On commodity laptop hardware the TTCI pipeline sustains roughly **5.5 million cells/second** (~**12 ms** per 256×256 tile, ~85 tiles/s single-core), sufficient for on-demand regional computation in the UI.
+
+---
+
+## Deployment
+
+Production is a single Docker image (Node build stage + Python runtime) defined in `Dockerfile`. The API serves the built SPA from `frontend/dist` and exposes `/api/health` for health checks.
+
+```bash
+make docker-run              # local smoke test
+# or
+docker build -t terrain-guard .
+docker run --rm -p 8000:8000 -e TTCI_SOURCE=tiles terrain-guard
+```
+
+[`render.yaml`](render.yaml) is a Render.com blueprint (`runtime: docker`, health check `/api/health`). Connect the GitHub repo and deploy the blueprint for a hosted demo URL.
 
 ---
 
@@ -360,6 +421,7 @@ On commodity laptop hardware the TTCI pipeline sustains roughly **5.5 million ce
 | `POST` | `/api/taws/check` | Point terrain-proximity check |
 | `POST` | `/api/taws/lookahead` | Predictive look-ahead terrain alerting |
 | `POST` | `/api/uas/corridor` | UAS corridor TTCI risk scoring |
+| `POST` | `/api/uas/plan-route` | Risk-aware A* UAS path (altitude + max TTCI limits) |
 | `GET` | `/api/validation` | Local CFIT validation report |
 | `GET` | `/api/validation/global` | Global CFIT validation report |
 | `GET` | `/api/validation/patch-metrics` | Per-site TTCI heatmap data (Accidents tab) |
@@ -371,15 +433,17 @@ Interactive OpenAPI docs: **http://127.0.0.1:8000/docs** when the backend is run
 ## Testing
 
 ```bash
-cd backend
-pytest
+make test
+# or
+cd backend && .venv/bin/pytest tests/
 ```
 
-**48 tests** cover the TTCI pipeline (unit range, no-data handling, risk classification, weight validation), geo round-trip, MSA calculator, overlay renderer, and validation statistics (including Hypothesis property tests).
+**52 tests** cover the TTCI pipeline (unit range, no-data handling, risk classification, weight validation), geo round-trip, MSA calculator, UAS pathfinder, overlay renderer, and validation statistics (including Hypothesis property tests).
 
 ```bash
-cd frontend
-npm run build    # TypeScript check + production bundle
+make check                   # pytest + production frontend build
+# or
+cd frontend && npm run build
 ```
 
 ---
@@ -387,6 +451,7 @@ npm run build    # TypeScript check + production bundle
 ## Limitations
 
 - **Not certified avionics.** `/api/taws/lookahead` demonstrates predictive look-ahead alerting modulated by TTCI; it is not a certified TAWS/EGPWS and omits flight-phase logic and obstacle databases.
+- **UAS route planner.** `/api/uas/plan-route` runs A* on a downsampled planning grid with simplified clearance and risk penalties — a demonstration tool, not a certified UAS flight planner.
 - **In-memory server state.** One active TTCI surface at a time; restarting the backend clears it unless preloaded.
 - **No accounts or cloud sync.** History pins and notes live in browser `localStorage` only.
 - **3D globe licensing.** CesiumJS (Apache-2.0) loads locally via `vite-plugin-cesium` with no Cesium ion token; base imagery is Esri World Imagery; relief is built from the project's own DEM grid.

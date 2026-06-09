@@ -9,7 +9,7 @@ import "leaflet/dist/leaflet.css";
 import "leaflet-draw/dist/leaflet.draw.css";
 import { Pencil } from "lucide-react";
 import { api, type Bounds } from "@/lib/api";
-import { useTtci, riskColor } from "@/state/ttci";
+import { useTtci, riskColor, type ActiveRegion } from "@/state/ttci";
 import { useTools } from "@/state/tools";
 import { MsaProfileChart } from "@/components/charts";
 import { cn, fmt, fmtInt } from "@/lib/utils";
@@ -43,6 +43,7 @@ const MODE_HINTS: Record<string, string> = {
   "draw-area": "Drag a box around the terrain you want to analyze · Esc to cancel",
   "draw-route": "Click on the map to place waypoints · double-click to finish",
   "draw-corridor": "Click to place UAS corridor waypoints · double-click to finish",
+  "plan-uas-route": "Click the map to place the selected UAS route point",
   "place-aircraft": "Click the map to place the aircraft",
   "place-history-pin": "Click the map to drop a history pin · Esc to cancel",
 };
@@ -270,11 +271,26 @@ function TileLayerThemed() {
 
 function ClickLayer() {
   const { activeRegion, setLastQuery, lastQuery, toast } = useTtci();
-  const { mode, setMode, setAircraft, showTawsTab, addHistoryPin } = useTools();
+  const {
+    mode, setMode, setAircraft, showTawsTab, addHistoryPin,
+    uasPickTarget, setUasPlanStart, setUasPlanEnd, setUasPlannedPath, setUasPlanResult,
+  } = useTools();
   useMapEvents({
     click: async (e) => {
       if (mode === "place-history-pin") {
         addHistoryPin(e.latlng.lat, e.latlng.lng);
+        setMode("idle");
+        return;
+      }
+      if (mode === "plan-uas-route") {
+        const pt: [number, number] = [e.latlng.lat, e.latlng.lng];
+        setUasPlannedPath(null);
+        setUasPlanResult(null);
+        if (uasPickTarget === "start") {
+          setUasPlanStart(pt);
+        } else {
+          setUasPlanEnd(pt);
+        }
         setMode("idle");
         return;
       }
@@ -426,6 +442,44 @@ function MsaLayers() {
           </Rectangle>
         );
       })}
+    </>
+  );
+}
+
+function PlannedRouteLayers() {
+  const { uasPlanStart, uasPlanEnd, uasPlannedPath, uasPlanResult } = useTools();
+
+  return (
+    <>
+      {uasPlannedPath && uasPlannedPath.length > 1 && (
+        <Polyline
+          positions={uasPlannedPath}
+          pathOptions={{
+            color: uasPlanResult?.stats?.peak_risk_color ?? "#10b981",
+            weight: 5,
+            opacity: 0.92,
+            lineCap: "round",
+          }}
+        />
+      )}
+      {uasPlanStart && (
+        <CircleMarker
+          center={uasPlanStart}
+          radius={6}
+          pathOptions={{ color: "#fff", weight: 2, fillColor: "#22c55e", fillOpacity: 1 }}
+        >
+          <Tooltip permanent direction="top">Start</Tooltip>
+        </CircleMarker>
+      )}
+      {uasPlanEnd && (
+        <CircleMarker
+          center={uasPlanEnd}
+          radius={6}
+          pathOptions={{ color: "#fff", weight: 2, fillColor: "#ef4444", fillOpacity: 1 }}
+        >
+          <Tooltip permanent direction="top">End</Tooltip>
+        </CircleMarker>
+      )}
     </>
   );
 }
@@ -969,15 +1023,148 @@ function WarningOverlay() {
   );
 }
 
+// ── Live terrain telemetry ("sensors under the cursor") ──
+// Loads a downsampled metric grid once per active region and reads it locally on
+// every mouse move, so the readout is instant (no per-pixel network round-trip).
+interface HoverSample {
+  lat: number; lon: number;
+  elevation_m: number; slope_deg: number; tri_m: number; ttci: number;
+}
+
+function useRegionGrid(activeRegion: ActiveRegion | null) {
+  const [grid, setGrid] = useState<import("@/lib/api").RegionGrid | null>(null);
+  useEffect(() => {
+    if (!activeRegion) { setGrid(null); return; }
+    let cancelled = false;
+    setGrid(null);
+    api
+      .regionGrid(activeRegion, 256, 256)
+      .then((g) => { if (!cancelled) setGrid(g); })
+      .catch(() => { if (!cancelled) setGrid(null); });
+    return () => { cancelled = true; };
+  }, [activeRegion]);
+  return grid;
+}
+
+function sampleGrid(
+  grid: import("@/lib/api").RegionGrid,
+  lat: number,
+  lon: number,
+): HoverSample | null {
+  const { south, north, west, east } = grid.bounds;
+  if (lat < south || lat > north || lon < west || lon > east) return null;
+  const fy = (north - lat) / Math.max(north - south, 1e-9);
+  const fx = (lon - west) / Math.max(east - west, 1e-9);
+  const row = Math.min(grid.rows - 1, Math.max(0, Math.floor(fy * grid.rows)));
+  const col = Math.min(grid.cols - 1, Math.max(0, Math.floor(fx * grid.cols)));
+  return {
+    lat, lon,
+    elevation_m: grid.elevation_m[row][col],
+    slope_deg: grid.slope_deg[row][col],
+    tri_m: grid.tri_m[row][col],
+    ttci: grid.ttci[row][col],
+  };
+}
+
+/** In-map probe: maps the cursor to a grid cell and reports the local readout. */
+function HoverProbe({
+  grid,
+  onHover,
+}: {
+  grid: import("@/lib/api").RegionGrid | null;
+  onHover: (s: HoverSample | null) => void;
+}) {
+  useMapEvents({
+    mousemove: (e) => {
+      if (!grid) { onHover(null); return; }
+      onHover(sampleGrid(grid, e.latlng.lat, e.latlng.lng));
+    },
+    mouseout: () => onHover(null),
+  });
+  return null;
+}
+
+/** Floating "Live Terrain Sensors" panel, styled to match the existing HUDs. */
+function HoverTelemetryHUD({ sample }: { sample: HoverSample | null }) {
+  const { riskLevels } = useTtci();
+
+  const status = sample
+    ? sample.ttci >= 0.8 ? { label: "CRITICAL NO-FLY", dot: "🔴" }
+      : sample.ttci >= 0.6 ? { label: "HIGH RISK", dot: "🟠" }
+      : sample.ttci >= 0.4 ? { label: "MODERATE", dot: "🟡" }
+      : sample.ttci >= 0.2 ? { label: "CAUTION", dot: "🟢" }
+      : { label: "SAFE", dot: "🟢" }
+    : null;
+  const ttciColor = sample ? riskColor(riskLevels, sample.ttci) : "#888";
+
+  return (
+    <div className="absolute right-3 top-16 z-[700] w-56 overflow-hidden rounded-xl border border-border/60 bg-card/96 shadow-2xl backdrop-blur-md">
+      <div className="flex items-center justify-between border-b border-border/50 bg-secondary/40 px-3 py-1.5">
+        <span className="font-mono text-[9px] font-bold uppercase tracking-[0.22em] text-muted-foreground">
+          Live Terrain Sensors
+        </span>
+      </div>
+
+      {sample ? (
+        <div className="space-y-3 p-3">
+          <div>
+            <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">TTCI Score</div>
+            <div className="font-mono text-2xl font-extrabold leading-none" style={{ color: ttciColor }}>
+              {sample.ttci.toFixed(3)}
+            </div>
+            <div className="mt-1 text-[11px] font-bold" style={{ color: ttciColor }}>
+              {status?.dot} {status?.label}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-3 gap-y-2.5">
+            <div>
+              <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Elevation</div>
+              <div className="font-mono text-sm font-bold leading-none">
+                {Math.round(sample.elevation_m).toLocaleString()} m
+              </div>
+            </div>
+            <div>
+              <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Slope</div>
+              <div className="font-mono text-sm font-bold leading-none">{sample.slope_deg.toFixed(1)}°</div>
+            </div>
+            <div>
+              <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Ruggedness</div>
+              <div className="font-mono text-sm font-bold leading-none">{sample.tri_m.toFixed(1)} m</div>
+            </div>
+            <div>
+              <div className="mb-0.5 text-[9px] uppercase tracking-widest text-muted-foreground">Position</div>
+              <div className="font-mono text-[11px] font-semibold leading-tight text-muted-foreground">
+                {sample.lat.toFixed(3)}°<br />{sample.lon.toFixed(3)}°
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="p-3 text-[11px] text-muted-foreground">
+          Move the cursor over the terrain to read live elevation, slope, ruggedness and TTCI.
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MapView() {
   const { status, activeRegion, overlayVersion, activate } = useTtci();
   const {
     mode, setMode, toggleDrawArea, view, setView,
     overlayOpacity, showOverlay, demSource,
     showMsaTab, showTawsTab, showUasTab,
+    flyPosition,
   } = useTools();
   const drawingArea = mode === "draw-area";
   const onAreaRef = useRef<(b: Bounds) => void>(() => {});
+
+  const grid = useRegionGrid(activeRegion);
+  const [hover, setHover] = useState<HoverSample | null>(null);
+  // Show the live sensors panel only when idle on an active region and not flying
+  // (the fly simulation reuses the same top-right slot for its pilot HUD).
+  const showTelemetry = Boolean(activeRegion) && mode === "idle" && !flyPosition;
 
   const computing = status === "computing";
   const { step, done } = useComputeProgress(computing);
@@ -1019,9 +1206,11 @@ export function MapView() {
         <FitToRegion />
         <ApplyMapFocus />
         <ClickLayer />
+        {showTelemetry && <HoverProbe grid={grid} onHover={setHover} />}
         <DrawController onArea={(b) => onAreaRef.current(b)} />
         {showMsaTab && <MsaLayers />}
         {showUasTab && <CorridorLayers />}
+        {showUasTab && <PlannedRouteLayers />}
         {showMsaTab && <FlyRouteLayers />}
         {showTawsTab && <TawsLayers />}
         <HistoryLayers />
@@ -1029,6 +1218,7 @@ export function MapView() {
       </MapContainer>
 
       <MapModeBanner />
+      {showTelemetry && <HoverTelemetryHUD sample={hover} />}
       {showMsaTab && <PilotHUD />}
       {showMsaTab && <CockpitStrip />}
       {showMsaTab && <WarningOverlay />}

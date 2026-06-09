@@ -1,11 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
-import type { MsaSector, ProfilePoint, TawsLookahead, Validation, CorridorResult } from "@/lib/api";
+import type { MsaSector, ProfilePoint, TawsLookahead, Validation, CorridorResult, UasPlanRouteResult } from "@/lib/api";
 
 export type ToolMode =
   | "idle"
   | "draw-area"
   | "draw-route"
   | "draw-corridor"
+  | "plan-uas-route"
   | "place-aircraft"
   | "place-history-pin";
 
@@ -88,6 +89,18 @@ interface ToolsState {
   setCorridorWaypoints: (w: [number, number][]) => void;
   corridorSegments: CorridorSegment[] | null;
   setCorridorSegments: (s: CorridorSegment[] | null) => void;
+
+  // UAS route planner
+  uasPlanStart: [number, number] | null;
+  setUasPlanStart: (p: [number, number] | null) => void;
+  uasPlanEnd: [number, number] | null;
+  setUasPlanEnd: (p: [number, number] | null) => void;
+  uasPickTarget: "start" | "end";
+  setUasPickTarget: (t: "start" | "end") => void;
+  uasPlannedPath: [number, number][] | null;
+  setUasPlannedPath: (p: [number, number][] | null) => void;
+  uasPlanResult: UasPlanRouteResult | null;
+  setUasPlanResult: (r: UasPlanRouteResult | null) => void;
 
   // CFIT
   validation: Validation | null;
@@ -221,6 +234,7 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     if (
       m === "draw-route"
       || m === "draw-corridor"
+      || m === "plan-uas-route"
       || m === "place-aircraft"
       || m === "place-history-pin"
     ) {
@@ -291,6 +305,11 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
 
   const [corridorWaypoints, setCorridorWaypoints] = useState<[number, number][]>([]);
   const [corridorSegments, setCorridorSegments] = useState<CorridorSegment[] | null>(null);
+  const [uasPlanStart, setUasPlanStart] = useState<[number, number] | null>(null);
+  const [uasPlanEnd, setUasPlanEnd] = useState<[number, number] | null>(null);
+  const [uasPickTarget, setUasPickTarget] = useState<"start" | "end">("start");
+  const [uasPlannedPath, setUasPlannedPath] = useState<[number, number][] | null>(null);
+  const [uasPlanResult, setUasPlanResult] = useState<UasPlanRouteResult | null>(null);
   const [routeWaypoints, setRouteWaypoints] = useState<[number, number][]>([]);
   const [msaSectors, setMsaSectors] = useState<MsaSector[]>([]);
   const [msaProfile, setMsaProfile] = useState<ProfilePoint[]>([]);
@@ -333,9 +352,13 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const setShowUasTab = useCallback((on: boolean) => {
     _setShowUasTab(on);
     if (!on) {
-      if (mode === "draw-corridor") _setMode("idle");
+      if (mode === "draw-corridor" || mode === "plan-uas-route") _setMode("idle");
       setCorridorWaypoints([]);
       setCorridorSegments(null);
+      setUasPlanStart(null);
+      setUasPlanEnd(null);
+      setUasPlannedPath(null);
+      setUasPlanResult(null);
     }
   }, [mode]);
 
@@ -415,6 +438,10 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     _setMode("idle");
     setCorridorWaypoints([]);
     setCorridorSegments(null);
+    setUasPlanStart(null);
+    setUasPlanEnd(null);
+    setUasPlannedPath(null);
+    setUasPlanResult(null);
     setRouteWaypoints([]);
     setMsaSectors([]);
     setMsaProfile([]);
@@ -428,6 +455,9 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     mode, setMode, beginDrawArea, toggleDrawArea, view, setView,
     pendingMapFocus, consumeMapFocus, registerGlobeViewGetter, registerMapViewGetter, consumeGlobeFocus,
     corridorWaypoints, setCorridorWaypoints, corridorSegments, setCorridorSegments,
+    uasPlanStart, setUasPlanStart, uasPlanEnd, setUasPlanEnd,
+    uasPickTarget, setUasPickTarget, uasPlannedPath, setUasPlannedPath,
+    uasPlanResult, setUasPlanResult,
     routeWaypoints, setRouteWaypoints, msaSectors, setMsaSectors, msaProfile, setMsaProfile,
     flyPosition, setFlyPosition,
     aircraft, setAircraft, tawsParams, setTawsParams, tawsResult, setTawsResult,

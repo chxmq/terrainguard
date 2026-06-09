@@ -86,6 +86,38 @@ export interface CorridorResult {
   dominant_risk_color: string;
 }
 
+export interface RegionGrid {
+  rows: number;
+  cols: number;
+  bounds: Bounds;
+  elev_min: number;
+  elev_max: number;
+  source_label?: string;
+  ttci: number[][];
+  elevation: number[][];
+  elevation_m: number[][];
+  slope_deg: number[][];
+  tri_m: number[][];
+}
+
+export interface UasPlanRouteStats {
+  node_count: number;
+  max_ttci: number;
+  mean_ttci: number;
+  peak_risk_level: string;
+  peak_risk_color: string;
+  flight_clearance_m: number;
+  calc_time_ms: number;
+}
+
+export interface UasPlanRouteResult {
+  ok: boolean;
+  path?: number[][];
+  stats?: UasPlanRouteStats;
+  error?: string;
+  detail?: string;
+}
+
 export interface ValidationAccident {
   flight: string; date: string; site: string; country: string;
   lat: number; lon: number; fatalities: number; source: string;
@@ -135,6 +167,11 @@ export const api = {
   overlayUrl: (version = 0) => `/api/ttci/overlay.png?v=${version}`,
   regionGridUrl: (b: Bounds & { zoom: number }, rows = 256, cols = 256) =>
     `/api/region/grid?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}&zoom=${b.zoom}&rows=${rows}&cols=${cols}`,
+  regionGrid: (b: Bounds & { zoom: number; source?: string }, rows = 256, cols = 256) =>
+    jget<RegionGrid>(
+      `/api/region/grid?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}` +
+      `&zoom=${b.zoom}&source=${b.source ?? "tiles"}&rows=${rows}&cols=${cols}`,
+    ),
   regionOverlayUrl: (b: Bounds & { zoom: number }) =>
     `/api/region/overlay.png?south=${b.south}&north=${b.north}&west=${b.west}&east=${b.east}&zoom=${b.zoom}`,
   query: (lat: number, lon: number) => jget<PointQuery>(`/api/ttci/query?lat=${lat}&lon=${lon}`),
@@ -152,4 +189,10 @@ export const api = {
     jget<PatchMetrics>(`/api/validation/patch-metrics?lat=${lat}&lon=${lon}&dim=${dim}`),
   uasCorridor: (waypoints: number[][], buffer_nm: number) =>
     jpost<CorridorResult>("/api/uas/corridor", { waypoints, buffer_nm }),
+  uasPlanRoute: (b: {
+    start: number[];
+    end: number[];
+    max_altitude_m: number;
+    max_ttci: number;
+  }) => jpost<UasPlanRouteResult>("/api/uas/plan-route", b),
 };
