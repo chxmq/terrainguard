@@ -9,8 +9,12 @@ const STEPS = [
 ];
 
 export function InfoPanel() {
-  const { info, riskLevels, lastQuery, activeRegion } = useTtci();
+  const { info, lastQuery, activeRegion } = useTtci();
   const stats = info?.stats;
+  const dist = info?.risk_distribution ?? [];
+  const highCritical = dist
+    .filter((b) => b.min >= 0.6)
+    .reduce((sum, b) => sum + b.pct, 0);
 
   return (
     <div className="space-y-5">
@@ -68,23 +72,42 @@ export function InfoPanel() {
           <SectionHead>Region summary</SectionHead>
           <div className="grid grid-cols-2 gap-3">
             <DataField label="Average risk" value={fmt(stats.mean, 2)} accent />
-            <DataField label="Highest risk" value={fmt(stats.max, 2)} accent />
-            <DataField label="Lowest risk" value={fmt(stats.min, 2)} />
+            <DataField label="High / Critical area" value={`${highCritical.toFixed(0)}%`} accent />
           </div>
-        </section>
-      )}
 
-      {riskLevels.length > 0 && (
-        <section className="border-t border-border pt-4">
-          <SectionHead>Risk scale</SectionHead>
-          <div className="space-y-2">
-            {riskLevels.map((l) => (
-              <div key={l.label} className="flex items-center gap-2 text-body-sm">
-                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: l.color }} />
-                <span className="text-foreground">{l.label}</span>
+          {dist.length > 0 && (
+            <div className="mt-4">
+              <div className="text-label mb-1.5">Area by risk band</div>
+              <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-secondary">
+                {dist.map((b) =>
+                  b.pct > 0 ? (
+                    <div
+                      key={b.label}
+                      style={{ width: `${b.pct}%`, background: b.color }}
+                      title={`${b.label}: ${b.pct}%`}
+                    />
+                  ) : null,
+                )}
               </div>
-            ))}
-          </div>
+              <ul className="mt-2.5 space-y-1.5">
+                {dist.map((b) => (
+                  <li key={b.label} className="flex items-center gap-2 text-body-sm">
+                    <span className="h-3 w-3 shrink-0 rounded-sm" style={{ background: b.color }} />
+                    <span className="text-foreground">{b.label}</span>
+                    <span className="ml-auto font-mono tabular-nums text-muted-foreground">
+                      {b.pct}%
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="mt-3 text-[10px] leading-snug text-muted-foreground/70">
+            TTCI is normalized per region (2nd–98th percentile), so values are relative to this
+            area's terrain. Average and band shares describe overall complexity better than the
+            raw min/max.
+          </p>
         </section>
       )}
     </div>

@@ -34,6 +34,7 @@ export function UasPanel() {
     uasPickTarget, setUasPickTarget,
     uasPlannedPath, setUasPlannedPath,
     uasPlanResult, setUasPlanResult,
+    logAssessment,
   } = useTools();
 
   const [uasMode, setUasMode] = useState<UasMode>("assess");
@@ -96,6 +97,22 @@ export function UasPanel() {
         result: results[i],
       }));
       setCorridorSegments(segments);
+      const totalDist = segments.reduce((s, seg) => s + seg.distKm, 0);
+      const worst = segments.reduce<CorridorSegment | null>(
+        (w, seg) => (seg.result.ttci.mean > (w?.result.ttci.mean ?? -Infinity) ? seg : w),
+        null,
+      );
+      logAssessment({
+        kind: "uas-corridor",
+        title: `UAS corridor · ${segments.length} segment${segments.length === 1 ? "" : "s"}`,
+        riskColor: worst?.result.dominant_risk_color,
+        lat: corridorWaypoints[0]?.[0] ?? null,
+        lon: corridorWaypoints[0]?.[1] ?? null,
+        lines: [
+          `Peak risk ${worst?.result.peak_risk_level ?? "—"} · max TTCI ${fmt(worst?.result.ttci.mean ?? null, 3)}`,
+          `Length ${totalDist.toFixed(1)} km · width ${corridorWidthM} m`,
+        ],
+      });
     } catch (err) {
       toast(
         formatApiError(err, "Corridor assessment failed. Is a terrain region loaded?"),
@@ -122,8 +139,29 @@ export function UasPanel() {
       if (result.ok && result.path) {
         setUasPlannedPath(result.path.map((p) => [p[0], p[1]] as [number, number]));
         toast(`Safe corridor found · ${result.stats?.node_count ?? 0} waypoints`, "success");
+        logAssessment({
+          kind: "uas-route",
+          title: "UAS route plan · safe path found",
+          riskColor: result.stats?.peak_risk_color,
+          lat: uasPlanStart[0],
+          lon: uasPlanStart[1],
+          lines: [
+            `Peak risk ${result.stats?.peak_risk_level ?? "—"} · max TTCI ${fmt(result.stats?.max_ttci ?? null, 3)}`,
+            `${result.stats?.node_count ?? 0} waypoints · ceiling ${maxAltitudeM} m · limit ${maxTtci.toFixed(2)}`,
+          ],
+        });
       } else if (!result.ok) {
         toast(result.error ?? "No safe corridor found", "error");
+        logAssessment({
+          kind: "uas-route",
+          title: "UAS route plan · no safe path",
+          lat: uasPlanStart[0],
+          lon: uasPlanStart[1],
+          lines: [
+            result.error ?? "No safe corridor found",
+            `ceiling ${maxAltitudeM} m · limit ${maxTtci.toFixed(2)}`,
+          ],
+        });
       }
     } catch (err) {
       toast(formatApiError(err, "Route planning failed. Is a terrain region loaded?"), "error");

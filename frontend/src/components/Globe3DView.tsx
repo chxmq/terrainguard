@@ -227,7 +227,7 @@ export function Globe3DView() {
       </div>
 
       {flyActive && (
-        <div className="absolute bottom-4 left-1/2 z-[650] flex -translate-x-1/2 items-center gap-3 panel-float px-4 py-2.5">
+        <div className="absolute bottom-[196px] left-1/2 z-[760] flex -translate-x-1/2 items-center gap-3 panel-float px-4 py-2.5">
           <Button
             size="sm"
             variant={tracking ? "default" : "outline"}

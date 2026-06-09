@@ -1,6 +1,7 @@
 /** Typed client for the Terrain Guard FastAPI backend (proxied at /api). */
 
 export interface RiskLevel { min: number; max: number; label: string; color: string }
+export interface RiskBand { min: number; max: number; label: string; color: string; count: number; pct: number }
 export interface Bounds { south: number; north: number; west: number; east: number }
 export interface Stats { min: number; max: number; mean: number; std: number }
 
@@ -15,6 +16,7 @@ export interface Info {
   shape?: [number, number];
   stats?: Stats;
   risk_levels?: RiskLevel[];
+  risk_distribution?: RiskBand[];
 }
 
 export interface ActivateResponse {

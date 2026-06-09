@@ -272,7 +272,7 @@ function TileLayerThemed() {
 function ClickLayer() {
   const { activeRegion, setLastQuery, lastQuery, toast } = useTtci();
   const {
-    mode, setMode, setAircraft, showTawsTab, addHistoryPin,
+    mode, setMode, setAircraft, showTawsTab, addHistoryPin, logAssessment,
     uasPickTarget, setUasPlanStart, setUasPlanEnd, setUasPlannedPath, setUasPlanResult,
   } = useTools();
   useMapEvents({
@@ -301,7 +301,19 @@ function ClickLayer() {
       }
       if (mode !== "idle" || !activeRegion) return;
       try {
-        setLastQuery(await api.query(e.latlng.lat, e.latlng.lng));
+        const q = await api.query(e.latlng.lat, e.latlng.lng);
+        setLastQuery(q);
+        logAssessment({
+          kind: "point",
+          title: `Point ${fmt(q.lat, 3)}°, ${fmt(q.lon, 3)}°`,
+          riskColor: q.risk_color,
+          lat: q.lat,
+          lon: q.lon,
+          lines: [
+            `TTCI ${fmt(q.ttci, 3)} · ${q.risk_level}`,
+            `Elevation ${fmtInt(q.elevation_ft)} ft · Slope ${fmt(q.metrics.slope_deg, 1)}°`,
+          ],
+        });
       } catch (err) {
         toast(formatApiError(err, NOTIFY.pointQueryFailed), "error");
       }
@@ -553,6 +565,7 @@ function HistoryLayers() {
   return (
     <>
       {historyItems.map((item) => {
+        if (item.kind === "assessment") return null;
         if (item.lat == null || item.lon == null) return null;
         const selected = selectedHistoryId === item.id;
         return (
@@ -776,7 +789,7 @@ function RiskLegend() {
 }
 
 /** Floating pilot HUD shown during Fly Route simulation. */
-function PilotHUD() {
+export function PilotHUD() {
   const { flyPosition } = useTools();
   const { riskLevels } = useTtci();
   if (!flyPosition) return null;
@@ -873,7 +886,7 @@ function PilotHUD() {
 }
 
 /** Full-width cockpit instrument strip shown at the bottom of the map during flight simulation. */
-function CockpitStrip() {
+export function CockpitStrip() {
   const { flyPosition, msaProfile, msaSectors } = useTools();
   const { riskLevels } = useTtci();
   if (!flyPosition || msaProfile.length === 0) return null;
@@ -981,7 +994,7 @@ function CockpitStrip() {
  * CAUTION overlay: amber flash border + "OBSTACLE AHEAD" banner.
  * Both trigger their respective audio cues via useTerrainAudio.
  */
-function WarningOverlay() {
+export function WarningOverlay() {
   const { flyPosition } = useTools();
   const { trigger } = useTerrainAudio();
 
@@ -1220,9 +1233,6 @@ export function MapView() {
 
       <MapModeBanner />
       {showTelemetry && <HoverTelemetryHUD sample={hover} />}
-      {showMsaTab && <PilotHUD />}
-      {showMsaTab && <CockpitStrip />}
-      {showMsaTab && <WarningOverlay />}
 
       {/* Risk legend */}
       <RiskLegend />

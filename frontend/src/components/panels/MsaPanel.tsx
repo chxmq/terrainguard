@@ -59,6 +59,7 @@ export function MsaPanel() {
     msaSectors, setMsaSectors,
     msaProfile, setMsaProfile,
     flyPosition, setFlyPosition,
+    logAssessment,
   } = useTools();
 
   const [busy, setBusy] = useState(false);
@@ -116,6 +117,22 @@ export function MsaPanel() {
       const [m, p] = await Promise.all([api.msaCalculate(wp), api.msaProfile(wp)]);
       setMsaSectors(m.sectors);
       setMsaProfile(p.profile);
+      if (m.sectors.length > 0) {
+        const msh = Math.max(...m.sectors.map((s) => s.msa_ft));
+        const maxTtci = Math.max(...m.sectors.map((s) => s.ttci?.mean ?? 0));
+        const first = m.sectors[0].from;
+        logAssessment({
+          kind: "route",
+          title: `Route MSA · ${m.sectors.length} sector${m.sectors.length === 1 ? "" : "s"}`,
+          riskColor: riskColor(riskLevels, Math.min(maxTtci, 1)),
+          lat: first.lat,
+          lon: first.lon,
+          lines: [
+            `Route MSH ${fmtInt(msh)} ft`,
+            `Peak TTCI ${fmt(maxTtci, 3)} · ${routeWaypoints.length} waypoints`,
+          ],
+        });
+      }
       if (view !== "3d") setView("3d");
     } catch (err) {
       toast(formatApiError(err, NOTIFY.msaFailed), "error");

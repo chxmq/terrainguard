@@ -22,6 +22,7 @@ export function TawsPanel() {
     aircraft, setAircraft,
     tawsParams, setTawsParams,
     tawsResult, setTawsResult,
+    logAssessment,
   } = useTools();
   const simRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const simBusyRef = useRef(false);
@@ -31,10 +32,26 @@ export function TawsPanel() {
   aircraftRef.current = aircraft;
   tawsParamsRef.current = tawsParams;
 
-  const run = async (ac = aircraftRef.current, params = tawsParams) => {
+  const run = async (ac = aircraftRef.current, params = tawsParams, logIt = false) => {
     if (!ac) return;
     try {
-      setTawsResult(await api.tawsLookahead({ lat: ac.lat, lon: ac.lon, ...params }));
+      const result = await api.tawsLookahead({ lat: ac.lat, lon: ac.lon, ...params });
+      setTawsResult(result);
+      // Log only deliberate checks (placement / parameter edits), not every
+      // step of the running simulation, so the assessment log stays readable.
+      if (logIt) {
+        logAssessment({
+          kind: "taws",
+          title: `TAWS ${result.alert_level} · ${fmt(ac.lat, 3)}°, ${fmt(ac.lon, 3)}°`,
+          riskColor: result.alert_color,
+          lat: ac.lat,
+          lon: ac.lon,
+          lines: [
+            `${result.callout}`,
+            `Alt ${fmtInt(params.altitude_ft)} ft · min clearance ${result.min_clearance_ft == null ? "—" : `${fmtInt(result.min_clearance_ft)} ft`}`,
+          ],
+        });
+      }
     } catch (err) {
       toast(formatApiError(err, NOTIFY.tawsFailed), "error");
       stopSim();
@@ -44,7 +61,7 @@ export function TawsPanel() {
   // Recompute when the aircraft moves; debounce param edits so typing doesn't spam the API.
   useEffect(() => {
     if (!aircraft || simRef.current !== null) return;
-    const id = window.setTimeout(() => { run(aircraft, tawsParams); }, 350);
+    const id = window.setTimeout(() => { run(aircraft, tawsParams, true); }, 350);
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aircraft, tawsParams]);

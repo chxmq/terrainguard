@@ -144,6 +144,33 @@ def _ttci_stats(ttci: np.ndarray) -> Dict[str, float]:
     }
 
 
+def _risk_distribution(ttci: np.ndarray) -> List[Dict[str, Any]]:
+    """Share of valid TTCI cells falling in each of the five risk bands.
+
+    Uses the same half-open band boundaries as :func:`classify_risk` (each band
+    includes its lower bound and excludes its upper, except the final Critical
+    band which is inclusive on both ends). This is far more informative than the
+    raw min/max, which the per-metric percentile normalization pins to ~0 and ~1
+    for nearly every region.
+    """
+    valid = ttci[~np.isnan(ttci)]
+    total = int(valid.size)
+    out: List[Dict[str, Any]] = []
+    last = len(RISK_LEVELS) - 1
+    for index, (lo, hi, label, color) in enumerate(RISK_LEVELS):
+        if index == last:
+            mask = (valid >= lo) & (valid <= hi)
+        else:
+            mask = (valid >= lo) & (valid < hi)
+        count = int(np.count_nonzero(mask))
+        pct = (count / total * 100.0) if total else 0.0
+        out.append({
+            "min": lo, "max": hi, "label": label, "color": color,
+            "count": count, "pct": round(pct, 1),
+        })
+    return out
+
+
 def _require_ready() -> None:
     """Guard a TTCI data endpoint on service readiness, failing closed with a 503.
 
@@ -569,6 +596,7 @@ async def info():
         },
         "shape": list(ttci.shape),
         "stats": _ttci_stats(ttci),
+        "risk_distribution": _risk_distribution(ttci),
         "risk_levels": [
             {"min": lo, "max": hi, "label": label, "color": color}
             for lo, hi, label, color in RISK_LEVELS

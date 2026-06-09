@@ -12,11 +12,29 @@ export type ToolMode =
 
 export interface HistoryItem {
   id: string;
+  /** "pin" and "note" are user-created; "assessment" is an auto-logged analysis result. */
+  kind: "pin" | "note" | "assessment";
   lat: number | null;
   lon: number | null;
   title: string;
   body: string;
   createdAt: number;
+  // Assessment-only fields:
+  assessmentKind?: AssessmentKind;
+  lines?: string[];
+  riskColor?: string;
+}
+
+export type AssessmentKind = "point" | "route" | "taws" | "uas-corridor" | "uas-route";
+
+/** A single analysis result to record in the assessment log. */
+export interface AssessmentRecord {
+  kind: AssessmentKind;
+  title: string;
+  lines: string[];
+  riskColor?: string;
+  lat?: number | null;
+  lon?: number | null;
 }
 
 export interface CorridorSegment {
@@ -137,6 +155,8 @@ interface ToolsState {
   setSelectedHistoryId: (id: string | null) => void;
   addHistoryPin: (lat: number, lon: number, title?: string) => string;
   addHistoryNote: (title?: string, body?: string) => string;
+  logAssessment: (rec: AssessmentRecord) => void;
+  clearAssessmentLog: () => void;
   updateHistoryItem: (id: string, patch: Partial<Pick<HistoryItem, "title" | "body" | "lat" | "lon">>) => void;
   removeHistoryItem: (id: string) => void;
   focusMap: (lat: number, lon: number, zoom?: number) => void;
@@ -145,13 +165,19 @@ interface ToolsState {
 }
 
 const HISTORY_KEY = "terrain-guard-history";
+const MAX_ASSESSMENTS = 100;
 
 function readHistory(): HistoryItem[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as HistoryItem[];
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // Backfill `kind` for items saved before the assessment log existed.
+    return parsed.map((h) => ({
+      ...h,
+      kind: h.kind ?? (h.lat != null ? "pin" : "note"),
+    }));
   } catch {
     return [];
   }
@@ -292,7 +318,11 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
         if (pose) pendingGlobeFocusRef.current = pose;
       } else {
         const pose = globeViewGetterRef.current?.();
-        if (pose) {
+        // Only carry the globe location over when it is zoomed into a specific
+        // area (zoom >= 8). From a wide/global view, leave the 2D map at its full
+        // world view so the user can select any region instead of jumping to the
+        // globe's center point (lat 0, lon 0 — which lands on Africa).
+        if (pose && pose.zoom >= 8) {
           setPendingMapFocus({ lat: pose.lat, lon: pose.lon, zoom: Math.round(pose.zoom) });
         }
       }
@@ -365,6 +395,7 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(initial.sidebarOpen);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>(() => readHistory());
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
+  const lastAssessmentRef = useRef<{ sig: string; t: number } | null>(null);
 
   const setShowMsaTab = useCallback((on: boolean) => {
     _setShowMsaTab(on);
@@ -428,10 +459,11 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   }, [changeView]);
 
   const addHistoryPin = useCallback((lat: number, lon: number, title?: string) => {
-    const pinCount = historyItems.filter((h) => h.lat != null).length;
+    const pinCount = historyItems.filter((h) => h.kind === "pin").length;
     const id = newHistoryId();
     const item: HistoryItem = {
       id,
+      kind: "pin",
       lat,
       lon,
       title: title?.trim() || `Pin ${pinCount + 1}`,
@@ -444,10 +476,11 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
   }, [historyItems]);
 
   const addHistoryNote = useCallback((title?: string, body?: string) => {
-    const noteCount = historyItems.filter((h) => h.lat == null).length;
+    const noteCount = historyItems.filter((h) => h.kind === "note").length;
     const id = newHistoryId();
     const item: HistoryItem = {
       id,
+      kind: "note",
       lat: null,
       lon: null,
       title: title?.trim() || `Note ${noteCount + 1}`,
@@ -458,6 +491,43 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     setSelectedHistoryId(id);
     return id;
   }, [historyItems]);
+
+  // Record an analysis result in the assessment log. Identical back-to-back
+  // results (e.g. re-clicking the same cell) are de-duplicated, and the log is
+  // capped so it can't grow without bound in localStorage.
+  const logAssessment = useCallback((rec: AssessmentRecord) => {
+    const sig = `${rec.kind}|${rec.title}|${rec.lines.join("|")}`;
+    const now = Date.now();
+    const last = lastAssessmentRef.current;
+    if (last && last.sig === sig && now - last.t < 2000) return;
+    lastAssessmentRef.current = { sig, t: now };
+
+    const item: HistoryItem = {
+      id: newHistoryId(),
+      kind: "assessment",
+      assessmentKind: rec.kind,
+      lat: rec.lat ?? null,
+      lon: rec.lon ?? null,
+      title: rec.title,
+      body: "",
+      lines: rec.lines,
+      riskColor: rec.riskColor,
+      createdAt: now,
+    };
+    setHistoryItems((prev) => {
+      let kept = 0;
+      const next = [item, ...prev].filter((h) => {
+        if (h.kind !== "assessment") return true;
+        kept += 1;
+        return kept <= MAX_ASSESSMENTS;
+      });
+      return next;
+    });
+  }, []);
+
+  const clearAssessmentLog = useCallback(() => {
+    setHistoryItems((prev) => prev.filter((h) => h.kind !== "assessment"));
+  }, []);
 
   const updateHistoryItem = useCallback((
     id: string,
@@ -505,7 +575,8 @@ export function ToolsProvider({ children }: { children: React.ReactNode }) {
     disable3D, setDisable3D,
     sidebarOpen, setSidebarOpen,
     historyItems, selectedHistoryId, setSelectedHistoryId,
-    addHistoryPin, addHistoryNote, updateHistoryItem, removeHistoryItem, focusMap,
+    addHistoryPin, addHistoryNote, logAssessment, clearAssessmentLog,
+    updateHistoryItem, removeHistoryItem, focusMap,
     resetForNewRegion,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

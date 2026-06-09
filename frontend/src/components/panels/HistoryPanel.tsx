@@ -1,28 +1,68 @@
 import { useState } from "react";
-import { Crosshair, MapPin, Plus, Trash2 } from "lucide-react";
+import { ClipboardList, Crosshair, MapPin, Plus, Trash2 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { useTools } from "@/state/tools";
+import { useTools, type HistoryItem } from "@/state/tools";
 import { cn, fmt } from "@/lib/utils";
 
 export function HistoryPanel() {
   const {
     mode, setMode,
     historyItems, selectedHistoryId, setSelectedHistoryId,
-    addHistoryNote, updateHistoryItem, removeHistoryItem, focusMap,
+    addHistoryNote, updateHistoryItem, removeHistoryItem, clearAssessmentLog, focusMap,
   } = useTools();
 
   const placing = mode === "place-history-pin";
-  const pins = historyItems.filter((h) => h.lat != null && h.lon != null);
-  const notes = historyItems.filter((h) => h.lat == null && h.lon == null);
+  const assessments = historyItems.filter((h) => h.kind === "assessment");
+  const pins = historyItems.filter((h) => h.kind === "pin");
+  const notes = historyItems.filter((h) => h.kind === "note");
 
   return (
-    <Tabs defaultValue="pins" className="w-full">
-      <TabsList className="mb-4 grid w-full grid-cols-2">
+    <Tabs defaultValue="log" className="w-full">
+      <TabsList className="mb-4 grid w-full grid-cols-3">
+        <TabsTrigger value="log">Log</TabsTrigger>
         <TabsTrigger value="pins">Pins</TabsTrigger>
         <TabsTrigger value="notes">Notes</TabsTrigger>
       </TabsList>
+
+      <TabsContent value="log" className="mt-0 space-y-4">
+        <section>
+          <SectionHead>Assessment log</SectionHead>
+          <p className="text-body-sm mb-3">
+            Every terrain analysis you run — point queries, route MSA, UAS corridors and
+            routes, and TAWS checks — is recorded here automatically.
+          </p>
+          {assessments.length > 0 && (
+            <Button variant="outline" size="sm" className="w-full" onClick={clearAssessmentLog}>
+              <Trash2 className="mr-2 h-3.5 w-3.5" />
+              Clear log ({assessments.length})
+            </Button>
+          )}
+        </section>
+
+        <section className="border-t border-border pt-4">
+          {assessments.length === 0 ? (
+            <p className="text-body-sm text-muted-foreground">
+              No assessments yet. Click the map, or run a Route, UAS, or Alerts tool — results
+              show up here.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {assessments.map((item) => (
+                <AssessmentCard
+                  key={item.id}
+                  item={item}
+                  selected={selectedHistoryId === item.id}
+                  onSelect={() => setSelectedHistoryId(item.id)}
+                  onFocus={item.lat != null && item.lon != null ? () => focusMap(item.lat!, item.lon!) : undefined}
+                  onRemove={() => removeHistoryItem(item.id)}
+                />
+              ))}
+            </ul>
+          )}
+        </section>
+      </TabsContent>
 
       <TabsContent value="pins" className="mt-0 space-y-4">
         <section>
@@ -105,6 +145,76 @@ export function HistoryPanel() {
         </section>
       </TabsContent>
     </Tabs>
+  );
+}
+
+const ASSESSMENT_LABELS: Record<string, string> = {
+  point: "Point query",
+  route: "Route MSA",
+  taws: "TAWS alert",
+  "uas-corridor": "UAS corridor",
+  "uas-route": "UAS route",
+};
+
+function AssessmentCard({
+  item, selected, onSelect, onFocus, onRemove,
+}: {
+  item: HistoryItem;
+  selected: boolean;
+  onSelect: () => void;
+  onFocus?: () => void;
+  onRemove: () => void;
+}) {
+  const time = new Date(item.createdAt).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+  const tag = ASSESSMENT_LABELS[item.assessmentKind ?? ""] ?? "Assessment";
+
+  return (
+    <li
+      className={cn(
+        "rounded-lg border px-3 py-2.5 transition-colors",
+        selected ? "border-foreground/25 bg-foreground/5" : "border-border bg-secondary/30",
+      )}
+      onClick={onSelect}
+    >
+      <div className="flex items-start gap-2">
+        <ClipboardList
+          className="mt-0.5 h-3.5 w-3.5 shrink-0"
+          style={{ color: item.riskColor ?? undefined }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="rounded bg-foreground/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-muted-foreground">
+              {tag}
+            </span>
+            <span className="text-[10px] text-muted-foreground">{time}</span>
+          </div>
+          <div className="mt-1 text-body-sm font-medium text-foreground">{item.title}</div>
+          {item.lines?.map((line, i) => (
+            <div key={i} className="text-[11px] leading-snug text-muted-foreground">{line}</div>
+          ))}
+        </div>
+      </div>
+      <div className="mt-2 flex gap-1.5">
+        {onFocus && (
+          <Button type="button" variant="ghost" size="sm" className="h-7 flex-1 text-[11px]"
+            onClick={(e) => { e.stopPropagation(); onFocus(); }}>
+            Show on map
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn("h-7 px-2 text-muted-foreground hover:text-destructive", !onFocus && "ml-auto")}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          aria-label="Remove assessment"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    </li>
   );
 }
 
