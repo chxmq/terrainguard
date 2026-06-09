@@ -1,0 +1,32 @@
+# Git & IDE
+.git
+.gitignore
+.cursor
+.vscode
+.idea
+
+# Python
+**/__pycache__
+**/.pytest_cache
+**/.hypothesis
+**/.mypy_cache
+backend/venv
+backend/.venv
+**/*.pyc
+
+# Node (rebuilt in image)
+node_modules
+frontend/node_modules
+frontend/dist
+
+# Generated terrain cache (recomputed on the server)
+backend/data/tiles
+backend/data/*.tif
+backend/data/*.png
+backend/data/ttci_*
+
+# Docs screenshots are not needed at runtime
+docs
+
+# Local logs
+*.log

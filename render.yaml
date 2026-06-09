@@ -1,0 +1,18 @@
+# Render Blueprint — free web service (https://render.com)
+# Deploy: connect this GitHub repo on the Render dashboard, or run:
+#   brew install render   (or see https://render.com/docs/cli)
+#   render blueprint apply
+
+services:
+  - type: web
+    name: terrain-guard
+    runtime: docker
+    plan: free
+    region: oregon
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: TTCI_SOURCE
+        value: tiles
+      - key: PYTHONUNBUFFERED
+        value: "1"
